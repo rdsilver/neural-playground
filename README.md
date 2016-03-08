@@ -2,6 +2,7 @@
 Place, connect, and play around with your own neural network composed of different types of neurons
 
 View the project here http://rdsilver.github.io/neural-playground/
+(Only tested in Chrome)
 
 Instructions:
 
