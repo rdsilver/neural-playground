@@ -1,6 +1,5 @@
 'use strict';
 
-// TODO possibly refactor this out into a static method for each neuron type "setup"
 // Oscillator
 var osc;
 osc = new p5.Oscillator();

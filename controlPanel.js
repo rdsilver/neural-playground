@@ -1,5 +1,3 @@
-// TODO refactor these methods out into an object
-
 $(function() {
 	var prevState;
     $('#control-panel div').click(function() {
