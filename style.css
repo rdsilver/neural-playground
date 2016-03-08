@@ -1,0 +1,67 @@
+body   { 
+	padding: 0;
+    margin: 0;
+	background: #000000;
+	font-family: 'Roboto', sans-serif;
+    -webkit-user-select: none;  /* Chrome all / Safari all */
+    -moz-user-select: none;     /* Firefox all */
+    -ms-user-select: none;      /* IE 10+ */
+    user-select: none;          /* Likely future */  
+} 
+
+p {
+	margin-bottom: 5px;
+	font-size: 18px;
+	border-bottom: 1px solid black;
+}
+
+#control-panel {
+	width: 100%;
+	height: 100px;
+}
+
+#control-panel div{ 
+	background-color: rgb(100, 100, 100);
+	box-sizing: border-box;
+	border-right: 2px solid black;
+	text-align: center;
+}
+
+#neuron-type {
+	margin-bottom:5px;	
+}
+
+#activationLevel {
+	width: 35px;
+}
+
+#timerInput {
+	width: 50px;
+	display: inline;
+}
+
+#timesInput {
+	width: 100px;
+}
+
+#control-panel div.active { 
+	background-color: rgb(200, 200, 200);
+}
+
+.column-left{ 
+	float: left;
+	width: 33.33%; 
+	height: 100%;
+}
+
+.column-right{ 
+	float: right; 
+	width: 33.33%; 
+	height: 100%;
+}
+
+.column-center{ 
+	display: inline-block; 
+	width: 33.33%; 
+	height: 100%;
+}
