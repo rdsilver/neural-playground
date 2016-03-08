@@ -31,6 +31,7 @@ function drawGraphLines() {
   });
 }
 
+// For non p5.js users, this methods gets called over an over again
 function draw() {
   switch(state) {
     case 'live':
@@ -102,7 +103,6 @@ function live(x, y) {
     neuronList[`${x} ${y}`].addCharge(1);
   }
 }
-
 
 function windowResized() {
   resizeCanvas(window.innerWidth, window.innerHeight - 100);
