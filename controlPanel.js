@@ -40,4 +40,10 @@ $(function() {
 				$('#activationLevelSpan').show();
 		}
 	});
+
+	_.times(8, octave => {
+		_.each(twelveTones, (tone, index) => {
+			$('#noteInput').append($('<option></option>').val((octave+2)*12 + index).html(tone + (octave+1)));
+		});
+	});
 });

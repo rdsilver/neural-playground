@@ -5,11 +5,14 @@ var osc;
 osc = new p5.Oscillator();
 osc.setType('triangle');
 osc.amp(.05);
+var twelveTones = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
 
 class NoteNeuron extends Neuron {
 	constructor(x, y, neuronSize, actlvl, note) {
 		super(x, y, neuronSize, actlvl);
 		this.note = note;
+		console.log(this.note);
 	}
 
 	display() {
@@ -37,6 +40,5 @@ class NoteNeuron extends Neuron {
 		this.curCharge = 0;
 		this.currentSteps = 0;
 		osc.stop();
-		console.log('hello');
 	}
 }

@@ -173,7 +173,7 @@ class Neuron {
 	    var activationLevel = parseInt($('#activationLevel').val());
 	    var timerActivationInSeconds = parseFloat($('#timerActivationInput').val());
 	    var timesTimerRuns = parseFloat(parseInt($('#timesInput').val()));
-	    var noteInMidi = parseInt($('#noteInput').val());
+	    var noteString = parseInt($('#noteInput').val());
 
 	    let temp_neuron = undefined;
 	    switch (neuronType) {
@@ -190,7 +190,7 @@ class Neuron {
 	      	temp_neuron = new TimerNeuron(x, y, cellSize, activationLevel, timerActivationInSeconds, timesTimerRuns);
 	      	break;
 	      case 'note':
-	      	temp_neuron = new NoteNeuron(x, y, cellSize, activationLevel, noteInMidi);
+	      	temp_neuron = new NoteNeuron(x, y, cellSize, activationLevel, noteString);
 	      	break;
 
 	    }
