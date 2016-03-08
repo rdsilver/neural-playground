@@ -12,7 +12,6 @@ class NoteNeuron extends Neuron {
 	constructor(x, y, neuronSize, actlvl, note) {
 		super(x, y, neuronSize, actlvl);
 		this.note = note;
-		console.log(this.note);
 	}
 
 	display() {
