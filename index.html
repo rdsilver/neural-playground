@@ -1,0 +1,63 @@
+<html>
+	<head>
+	  <meta charset='UTF-8'>
+      <script src='https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.6.1/lodash.min.js'></script>
+      <script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+      <script src='https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.4.20/p5.min.js'></script>
+      <script language="javascript" src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.4.20/addons/p5.sound.min.js"></script>
+      <script src='actionPotential.js'></script>
+      <script src='neuron.js'></script>
+      <script src='noteNeuron.js'></script>
+      <script src='characterNeuron.js'></script>
+      <script src='negativeNeuron.js'></script>
+      <script src='timerNeuron.js'></script>
+      <script src='sketch.js'></script>
+      <script src='controlPanel.js'></script>
+	  <link rel='shortcut icon' type='image/x-icon' href='favicon.ico' />
+	  <link rel='stylesheet' type='text/css' href='style.css'>
+	  <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet' type='text/css'>
+	</head>
+
+	<body>
+		<div id='control-panel'>
+			<div id='neuron-placement' class='column-left active' data-state='neuronPlacement'>
+				<p>Place/Delete Neurons</p>
+				Neuron Type: 
+				<select id='neuron-type'>
+				  <option value='normal'>Normal</option>
+				  <option value='character'>Character</option>
+				  <option value='negative'>Negative</option>
+				  <option value='timer'>Timer</option>
+				  <option value='note'>Note</option>
+				</select><br>
+
+				<span id='activationLevelSpan'>
+					Activation Level: 
+					<input type='number' name='quantity' min='1' max='36' value='2' id='activationLevel'>
+				</span>
+
+				<span id='timerInputSpan' hidden>
+					Timer in Seconds: 
+					<input type='number' name='quantity' min='.25' max='10' value='1' step='.25' id='timerActivationInput'>
+					Times
+					<input type='number' name='quantity' min='-1' max='500' placeholder='-1 for forever' step='1' id='timesInput'>
+				</span>
+
+				<span id='noteInputSpan' hidden>
+					Note C1 - C8: 
+					<input type='number' name='quantity' min='24' max='108' value='24' step='1' id='noteInput'> 
+				</span>
+			</div>
+
+			<div id='connection-placement' class='column-center' data-state='connectionPlacement'>
+				<p>Place/Delete Connections</p>
+				<input type="radio" name="connection" value="one" checked> One-way connections<br>
+  				<input type="radio" name="connection" value="two"> Two-way connections
+			</div>
+
+			<div id='live-mode' class='column-right' data-state='live'>
+				<p>Live Mode</p>
+			</div>
+		</div>
+	</body>
+</html>
