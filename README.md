@@ -1,4 +1,4 @@
-# neural-playground
+# Neural Playground
 Place, connect, and play around with your own neural network composed of different types of neurons
 
 Active code branch is on the [gh-pages branch](https://github.com/rdsilver/neural-playground/tree/gh-pages). 
