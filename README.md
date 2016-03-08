@@ -8,6 +8,7 @@ Instructions:
 
 Click on a cell when in "Place/Delete neuron mode" to place a neuron there of your choosing. 
 To delete a neuron at a cell, click on it while in "Place/Delete neuron mode"
+To change neuron type choose an option from the dropdown menu
 
 To add connections between neurons click anywhere inside the "Place/Delete connection" to switch to that mode.
 First select a neuron (will turn gold) then select the neuron you want it to be connected to.
@@ -20,4 +21,4 @@ Click on a cell to add one charge, once a neuron reaches it's activation level i
 Timer Neurons ignore inbound action potentials and just continue do activate every X seconds.
 
 This is a WIP and new features will be added along side a better GUI. You can track what is being worked on in the github ISSUES.
-Feel free to add your own neurons and give me a pull request.
+Feel free to add your own neurons / work on other features and give me a pull request.
