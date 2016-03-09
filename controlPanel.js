@@ -1,6 +1,10 @@
-$(function() {
-	var prevState;
-    $('#control-panel div').click(function() {
+var prevState;
+var controlPanel = {
+	onControlPanelClick: function() {
+		$('#control-panel div').click(controlPanel.changeState);
+	},
+
+	changeState: function(event) {
 		if(!$(this).hasClass('active')) {
 			$('#control-panel div').removeClass('active');
 			$(this).addClass('active');
@@ -20,10 +24,14 @@ $(function() {
 				Neuron.resetNeurons();
 			}
 		}
-	});
+	},
 
-	$('#neuron-type').change(function(){
-		neuronType = $(this).val();
+	onNeuronTypeChange: function() {
+		$('#neuron-type').change(controlPanel.changeNeuronType);
+	},
+
+	changeNeuronType: function(event) {
+		var neuronType = $(this).val();
 
 		// Hide all spans then just show the applicable ones
 		_.each($('#neuron-placement span'), span => $(span).hide());
@@ -39,11 +47,19 @@ $(function() {
 			default:
 				$('#activationLevelSpan').show();
 		}
-	});
+	},
 
-	_.times(8, octave => {
-		_.each(twelveTones, (tone, index) => {
-			$('#noteInput').append($('<option></option>').val((octave+2)*12 + index).html(tone + (octave+1)));
+	addMusicalNotes: function() {
+		_.times(8, octave => {
+			_.each(twelveTones, (tone, index) => {
+				$('#noteInput').append($('<option></option>').val((octave+2)*12 + index).html(tone + (octave+1)));
+			});
 		});
-	});
+	}
+}
+
+$(function() {
+	controlPanel.addMusicalNotes();
+	controlPanel.onControlPanelClick();
+	controlPanel.onNeuronTypeChange();
 });
