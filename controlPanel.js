@@ -31,8 +31,8 @@ var controlPanel = {
 	},
 
 	changeNeuronType: function(event) {
-		var neuronType = $(this).val();
-
+		neuronType = $(this).val();
+		
 		// Hide all spans then just show the applicable ones
 		_.each($('#neuron-placement span'), span => $(span).hide());
 
