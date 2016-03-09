@@ -27,7 +27,7 @@ class NoteNeuron extends Neuron {
 
 	activate() {
 		osc.amp(.05);
-		osc.freq(midiToFreq(this.note++));
+		osc.freq(midiToFreq(this.note));
 		_.each(this.outBoundConnections, otherNeuron => {
 			let id = _.uniqueId();
 			actionPotentialList[`${id}`] = new ActionPotential(this, otherNeuron, this.size/2, id, this.actionPotentialCharge, this.size);
