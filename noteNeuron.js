@@ -4,9 +4,9 @@
 var osc;
 osc = new p5.Oscillator();
 osc.setType('triangle');
-osc.amp(.05);
 var twelveTones = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-
+osc.start();
+osc.amp(0);
 
 class NoteNeuron extends Neuron {
 	constructor(x, y, neuronSize, actlvl, note) {
@@ -26,9 +26,8 @@ class NoteNeuron extends Neuron {
 	}
 
 	activate() {
-		osc.freq(midiToFreq(this.note));
-		osc.stop();
-		osc.start();
+		osc.amp(.05);
+		osc.freq(midiToFreq(this.note++));
 		_.each(this.outBoundConnections, otherNeuron => {
 			let id = _.uniqueId();
 			actionPotentialList[`${id}`] = new ActionPotential(this, otherNeuron, this.size/2, id, this.actionPotentialCharge, this.size);
@@ -38,6 +37,6 @@ class NoteNeuron extends Neuron {
 	reset() {
 		this.curCharge = 0;
 		this.currentSteps = 0;
-		osc.stop();
+		osc.amp(0);
 	}
 }
