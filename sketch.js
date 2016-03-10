@@ -16,8 +16,8 @@ function setup() {
 }
 
 function drawGraphLines() {
-  var cols = _.floor(width/cellSize);
-  var rows = _.floor(height/cellSize);
+  var cols = _.ceil(width/cellSize);
+  var rows = _.ceil(height/cellSize);
 
   stroke(gridColor);
   _.times(cols, c => {
@@ -31,7 +31,7 @@ function drawGraphLines() {
   });
 }
 
-// For non p5.js users, this methods gets called over an over again
+// For non p5.js users, this methods gets called over and over again
 function draw() {
   switch(state) {
     case 'live':
