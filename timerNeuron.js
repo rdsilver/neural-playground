@@ -24,8 +24,9 @@ class TimerNeuron extends Neuron {
 	}
 
 	neuronSpecificRoutine() {
+		console.log(this.currentSteps);
 		// Send an activation every timeInSeconds, until you reach the max times you should send out
-		if (this.maxSteps === -1 || isNaN(this.maxSteps) || this.maxSteps > this.currentTimes) {
+		if (this.maxSteps === -1 || isNaN(this.maxSteps) || this.maxSteps > this.currentSteps) {
 			if (state === 'live' && this.lastActivation > this.timeInSeconds * 1000) {
 				super.activate();
 				this.lastActivation = 0;
