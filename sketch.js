@@ -35,12 +35,15 @@ function drawGraphLines() {
 function draw() {
   switch(state) {
     case 'live':
-      clearGrid(false);
+      clearScreen(false);
       Neuron.displayAllConnections();
       ActionPotential.displayAllActionPotentials();
       Neuron.displayAllNeurons();
       Neuron.allNeuronSpecificRoutines();
       break;
+    case 'neuronPlacement':
+      clearScreen();
+      mouseHover();
     default:
       ActionPotential.displayAllActionPotentials();
       Neuron.displayAllNeurons();
@@ -48,7 +51,7 @@ function draw() {
   }
 }
 
-function clearGrid(keepGrid) {
+function clearScreen(keepGrid = true) {
   fill(bgColor);
   noStroke();
   rect(0, 0, width, height);
@@ -75,6 +78,20 @@ function mouseClicked() {
     case 'live':
       live(x, y);
       break;
+  }
+}
+
+function mouseHover() {
+  // If above canvas just exit
+  if (mouseY < 0)
+    return;
+
+  var x = mouseX - (mouseX % cellSize);
+  var y = mouseY - (mouseY % cellSize);
+
+  if (!neuronList[`${x} ${y}`]) {
+    fill(gridColor);
+    rect(x, y, cellSize, cellSize);
   }
 }
 
@@ -106,5 +123,5 @@ function live(x, y) {
 
 function windowResized() {
   resizeCanvas(window.innerWidth, window.innerHeight - 100);
-  clearGrid(true);
+  clearScreen();
 }

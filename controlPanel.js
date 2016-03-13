@@ -19,7 +19,7 @@ var controlPanel = {
 			// If we arn't in live mode anymore, clear the grid, action potentials and all neuron charges
 			// Call restart function on every neuron
 			if (state !== 'live' && prevState === 'live') {
-				clearGrid(true);
+				clearScreen();
 				actionPotentialList = {};
 				Neuron.resetNeurons();
 			}

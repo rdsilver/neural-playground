@@ -68,7 +68,7 @@ class Neuron {
 			this.inBoundConnections[index] = otherNeuron;
 		} else {
 			delete this.inBoundConnections[index];
-			clearGrid(true);
+			clearScreen();
 		}
 	}
 
@@ -80,7 +80,7 @@ class Neuron {
 			this.outBoundConnections[index] = otherNeuron;
 		} else {
 			delete this.outBoundConnections[index];
-			clearGrid(true);
+			clearScreen();
 		}
 	}
 
@@ -89,12 +89,12 @@ class Neuron {
 		var index = `${otherNeuron.xCoord} ${otherNeuron.yCoord}`;
 		if (this.inBoundConnections[index]) {
 			delete this.inBoundConnections[index];
-			clearGrid(true);
+			clearScreen();
 		}
 
 		if (this.outBoundConnections[index]) {
 			delete this.outBoundConnections[index];
-			clearGrid(true);
+			clearScreen();
 		}
 	}
 

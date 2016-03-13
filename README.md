@@ -2,7 +2,8 @@
 Place, connect, and play around with your own neural network composed of different types of neurons
 
 View the project here http://rdsilver.github.io/neural-playground/
-(Only tested in Chrome)
+(Only tested in Chrome and probably only works in the latest version (49 atm))
+(Once this is a RoR app I will compile with Babel so everyone can use)
 
 Instructions:
 
