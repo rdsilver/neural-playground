@@ -55,8 +55,10 @@ var controlPanel = {
 				$('#noteInput').append($('<option></option>').val((octave+2)*12 + index).html(tone + (octave+1)));
 			});
 		});
-	},
+	}
+}
 
+var exampleSelection = {
 	addExamples: function() {
 		_.each(_.keys(exampleNeuronNets), exampleKey => {
 			$('#exampleInput').append($('<option></option>').val(exampleKey).html(exampleKey));
@@ -64,19 +66,18 @@ var controlPanel = {
 	},
 
 	onExampleChange: function() {
-		$('#exampleInput').change(controlPanel.changeExample);
+		$('#exampleInput').change(exampleSelection.changeExample);
 	},
 
 	changeExample: function(event) {
 		Neuron.loadExample($(this).val());
 	}
-
 }
 
 $(function() {
 	controlPanel.addMusicalNotes();
 	controlPanel.onControlPanelClick();
 	controlPanel.onNeuronTypeChange();
-	controlPanel.addExamples();
-	controlPanel.onExampleChange();
+	exampleSelection.addExamples();
+	exampleSelection.onExampleChange();
 });

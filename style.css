@@ -11,7 +11,7 @@ body   {
 } 
 
 p {
-	margin-bottom: 5px;
+	margin: 10px 0px 5px 0px;
 	font-size: 18px;
 	border-bottom: 1px solid black;
 }
@@ -26,7 +26,7 @@ a:visited {
 }
 
 #control-panel div{ 
-	background-color: rgb(100, 100, 100);
+	background-color: rgb(110, 110, 110);
 	box-sizing: border-box;
 	border-right: 2px solid black;
 	text-align: center;
