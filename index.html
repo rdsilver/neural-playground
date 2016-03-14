@@ -11,6 +11,7 @@
       <script src='characterNeuron.js'></script>
       <script src='negativeNeuron.js'></script>
       <script src='timerNeuron.js'></script>
+      <script src='exampleNeuronNets.js'></script>
       <script src='sketch.js'></script>
       <script src='controlPanel.js'></script>
 	  <link rel='shortcut icon' type='image/x-icon' href='favicon.ico' />
@@ -24,12 +25,12 @@
 			<div id='neuron-placement' class='column-left active' data-state='neuronPlacement'>
 				<p>Place/Delete Neurons</p>
 				Neuron Type: 
-				<select id='neuron-type'>
+				<select id='neuronType'>
 				  <option value='normal'>Normal</option>
 				  <option value='character'>Character</option>
 				  <option value='negative'>Negative</option>
 				  <option value='timer'>Timer</option>
-				  <option value='note'>Note</option>
+				  <!--The library running this broke, will investigate other options <option value='note'>Note</option>-->
 				</select><br>
 
 				<span id='activationLevelSpan'>
@@ -61,5 +62,12 @@
 				<p>Live Mode</p>
 			</div>
 		</div>
+
+		<span id='loadExamples'>
+			Load Example:
+			<select placeholder='Select Example' id='exampleInput'>
+				<option value="" disabled selected>Select Example</option>
+			</select>
+		</span>
 	</body>
 </html>

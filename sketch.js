@@ -51,7 +51,10 @@ function draw() {
   }
 }
 
-function clearScreen(keepGrid = true) {
+// Was using default param but not enough browser support
+function clearScreen(keepGrid) {
+  keepGrid = keepGrid === undefined;
+
   fill(bgColor);
   noStroke();
   rect(0, 0, width, height);
@@ -61,7 +64,6 @@ function clearScreen(keepGrid = true) {
 }
 
 function mouseClicked() {
-  // If they don't click on the grid just exit
   if (mouseY < 0)
     return;
 
@@ -82,7 +84,6 @@ function mouseClicked() {
 }
 
 function mouseHover() {
-  // If above canvas just exit
   if (mouseY < 0)
     return;
 

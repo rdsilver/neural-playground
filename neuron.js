@@ -171,29 +171,106 @@ class Neuron {
 
     static createNeuron(x, y) {
 	    var activationLevel = parseInt($('#activationLevel').val());
-	    var timerActivationInSeconds = parseFloat($('#timerActivationInput').val());
-	    var timesTimerRuns = parseFloat(parseInt($('#timesInput').val()));
-	    var noteString = parseInt($('#noteInput').val());
+	    var timeInSeconds = parseFloat($('#timerActivationInput').val());
+	    var maxSteps = parseFloat(parseInt($('#timesInput').val()));
+	    var noteMIDI = parseInt($('#noteInput').val());
 
-	    let temp_neuron = undefined;
+	    let tempNeuron = undefined;
 	    switch (neuronType) {
 	      case 'normal':
-	        temp_neuron = new Neuron(x, y, cellSize, activationLevel);
+	        tempNeuron = new Neuron(x, y, cellSize, activationLevel);
 	        break;
 	      case 'character':
-	        temp_neuron = new CharacterNeuron(x, y, cellSize, activationLevel);
+	        tempNeuron = new CharacterNeuron(x, y, cellSize, activationLevel);
 	        break;
 	      case 'negative':
-	      	temp_neuron = new NegativeNeuron(x, y, cellSize, activationLevel);
+	      	tempNeuron = new NegativeNeuron(x, y, cellSize, activationLevel);
 	      	break;
 	      case 'timer': 
-	      	temp_neuron = new TimerNeuron(x, y, cellSize, activationLevel, timerActivationInSeconds, timesTimerRuns);
+	      	tempNeuron = new TimerNeuron(x, y, cellSize, activationLevel, timeInSeconds, maxSteps);
 	      	break;
 	      case 'note':
-	      	temp_neuron = new NoteNeuron(x, y, cellSize, activationLevel, noteString);
+	      	tempNeuron = new NoteNeuron(x, y, cellSize, activationLevel, noteMIDI);
 	      	break;
 
 	    }
-	    neuronList[`${x} ${y}`] = temp_neuron; 
+	    neuronList[`${x} ${y}`] = tempNeuron; 
+    }
+
+    static loadExample(exampleName) {
+    	var exampleNeuronNet = JSON.parse(exampleNeuronNets[exampleName]);
+    	neuronList = {};
+		actionPotentialList = {};
+
+		// Adds the neurons to the neuronLists without their connections
+		_.each(exampleNeuronNet, neuron => {
+			let neuronType = neuron.type;
+			let tempNeuron = undefined;
+
+			switch (neuronType) {
+		      case 'Neuron':
+		        tempNeuron = new Neuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
+		        break;
+		      case 'CharacterNeuron':
+		        tempNeuron = new CharacterNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
+		        break;
+		      case 'NegativeNeuron':
+		      	tempNeuron = new NegativeNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
+		      	break;
+		      case 'TimerNeuron': 
+		      	tempNeuron = new TimerNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel, neuron.timeInSeconds, neuron.maxSteps);
+		      	break;
+		      case 'NoteNeuron':
+		      	tempNeuron = new NoteNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel, neuron.noteMIDI);
+		      	break;
+
+		    }
+
+		    neuronList[`${neuron.x} ${neuron.y}`] = tempNeuron;
+		});
+
+		// Adds connections
+		_.each(exampleNeuronNet, neuron => {
+			let tempNeuron = neuronList[`${neuron.x} ${neuron.y}`];
+
+			_.each(neuron.outBounds, outBoundNeuron =>{
+				tempNeuron.outBoundConnection(neuronList[outBoundNeuron]);
+			});
+
+			_.each(neuron.inBounds, inBoundNeuron =>{
+				tempNeuron.inBoundConnection(neuronList[inBoundNeuron]);
+			});
+		});
+    }
+
+    static saveExample() {
+    	var neurons = [];
+
+    	_.each(neuronList, neuron => {
+    		let neuronType = neuron.constructor.name;
+    		let neuronObj = {}
+
+    		neuronObj['type'] = neuronType;
+    		neuronObj['x'] = neuron.xCoord;
+    		neuronObj['y'] = neuron.yCoord;
+    		neuronObj['size'] = neuron.size;
+    		neuronObj['activationLevel'] = neuron.activationLevel;
+    		neuronObj['outBounds'] = _.keys(neuron.outBoundConnections);
+    		neuronObj['inBounds'] = _.keys(neuron.inBoundConnections);
+
+    		switch (neuronType) {
+		      case 'TimerNeuron':
+		      	neuronObj['timeInSeconds'] = neuron.timeInSeconds;
+		      	neuronObj['maxSteps'] = neuron.maxSteps;
+		      	break;
+		      case 'NoteNeuron':
+		      	neuronObj['noteMIDI'] = neuron.note;
+		      	break;
+	    	}
+
+	    	neurons.push(neuronObj);
+    	});
+
+    	return JSON.stringify(neurons);
     }
 }
