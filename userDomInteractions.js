@@ -78,6 +78,7 @@ $(function() {
 	controlPanel.addMusicalNotes();
 	controlPanel.onControlPanelClick();
 	controlPanel.onNeuronTypeChange();
+	
 	exampleSelection.addExamples();
 	exampleSelection.onExampleChange();
 });
