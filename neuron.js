@@ -218,6 +218,7 @@ class Neuron {
 		      	tempNeuron = new NegativeNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
 		      	break;
 		      case 'TimerNeuron': 
+		        neuron.maxSteps = neuron.maxSteps ? neuron.maxSteps : -1;
 		      	tempNeuron = new TimerNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel, neuron.timeInSeconds, neuron.maxSteps);
 		      	break;
 		      case 'NoteNeuron':
