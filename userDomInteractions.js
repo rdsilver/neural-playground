@@ -70,6 +70,8 @@ var exampleSelection = {
 	},
 
 	changeExample: function(event) {
+		Neuron.resetNeurons();
+		clearScreen();
 		Neuron.loadExample($(this).val());
 	}
 }
@@ -78,7 +80,7 @@ $(function() {
 	controlPanel.addMusicalNotes();
 	controlPanel.onControlPanelClick();
 	controlPanel.onNeuronTypeChange();
-	
+
 	exampleSelection.addExamples();
 	exampleSelection.onExampleChange();
 });
