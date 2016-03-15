@@ -47,6 +47,7 @@ function draw() {
     case 'neuronPlacement':
       clearScreen();
       mouseHover();
+      /* falls through */
     default:
       ActionPotential.displayAllActionPotentials();
       Neuron.displayAllNeurons();
@@ -62,13 +63,15 @@ function clearScreen(keepGrid) {
   noStroke();
   rect(0, 0, width, height);
 
-  if (keepGrid)
+  if (keepGrid) {
     drawGraphLines();
+  }
 }
 
 function mouseClicked() {
-  if (mouseY < 0)
+  if (mouseY < 0) {
     return;
+  }
 
   var x = mouseX - (mouseX % sketchOptions.cellSize);
   var y = mouseY - (mouseY % sketchOptions.cellSize);
@@ -87,8 +90,9 @@ function mouseClicked() {
 }
 
 function mouseHover() {
-  if (mouseY < 0)
+  if (mouseY < 0) {
     return;
+  }
 
   var x = mouseX - (mouseX % sketchOptions.cellSize);
   var y = mouseY - (mouseY % sketchOptions.cellSize);

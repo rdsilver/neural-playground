@@ -41,7 +41,7 @@ class Neuron {
 	}
 
 	addCharge(charge) {
-		this.curCharge += charge
+		this.curCharge += charge;
 
 		if (this.curCharge >= this.activationLevel) {
 			this.curCharge = 0;
@@ -145,12 +145,12 @@ class Neuron {
 
 	static addConnection(x, y) {
 		if(neuronList[`${x} ${y}`] !== selectedNeuron) {
-	        if ($( "#connection-placement :checked" ).val() === 'one') {
+	        if ($('#connection-placement :checked').val() === 'one') {
 	          neuronList[`${x} ${y}`].inBoundConnection(selectedNeuron);
 	          selectedNeuron.outBoundConnection(neuronList[`${x} ${y}`]);
 	        } else {
 	          neuronList[`${x} ${y}`].twoWayConnection(selectedNeuron);
-	          selectedNeuron.twoWayConnection(neuronList[`${x} ${y}`])
+	          selectedNeuron.twoWayConnection(neuronList[`${x} ${y}`]);
 	        }
 	    }
     }
@@ -163,8 +163,9 @@ class Neuron {
     }
 
     static unSelectNeuron() {
-    	if (selectedNeuron)
+    	if (selectedNeuron) {
     		selectedNeuron.toggleSelected();
+      }
 
     	selectedNeuron = false;
     }
@@ -175,7 +176,7 @@ class Neuron {
 	    var maxSteps = parseFloat(parseInt($('#timesInput').val()));
 	    var noteMIDI = parseInt($('#noteInput').val());
 
-	    let tempNeuron = undefined;
+	    var tempNeuron;
 	    switch (neuronType) {
 	      case 'normal':
 	        tempNeuron = new Neuron(x, y, sketchOptions.cellSize, activationLevel);
@@ -200,12 +201,12 @@ class Neuron {
     static loadExample(exampleName) {
     	var exampleNeuronNet = JSON.parse(exampleNeuronNets[exampleName]);
     	neuronList = {};
-		actionPotentialList = {};
+		  actionPotentialList = {};
 
 		// Adds the neurons to the neuronLists without their connections
 		_.each(exampleNeuronNet, neuron => {
 			let neuronType = neuron.type;
-			let tempNeuron = undefined;
+			let tempNeuron;
 
 			switch (neuronType) {
 		      case 'Neuron':
@@ -249,23 +250,23 @@ class Neuron {
 
     	_.each(neuronList, neuron => {
     		let neuronType = neuron.constructor.name;
-    		let neuronObj = {}
+    		let neuronObj = {};
 
-    		neuronObj['type'] = neuronType;
-    		neuronObj['x'] = neuron.xCoord;
-    		neuronObj['y'] = neuron.yCoord;
-    		neuronObj['size'] = neuron.size;
-    		neuronObj['activationLevel'] = neuron.activationLevel;
-    		neuronObj['outBounds'] = _.keys(neuron.outBoundConnections);
-    		neuronObj['inBounds'] = _.keys(neuron.inBoundConnections);
+    		neuronObj.type = neuronType;
+    		neuronObj.x = neuron.xCoord;
+    		neuronObj.y = neuron.yCoord;
+    		neuronObj.size = neuron.size;
+    		neuronObj.activationLevel = neuron.activationLevel;
+    		neuronObj.outBounds = _.keys(neuron.outBoundConnections);
+    		neuronObj.inBounds = _.keys(neuron.inBoundConnections);
 
     		switch (neuronType) {
 		      case 'TimerNeuron':
-		      	neuronObj['timeInSeconds'] = neuron.timeInSeconds;
-		      	neuronObj['maxSteps'] = neuron.maxSteps;
+		      	neuronObj.timeInSeconds = neuron.timeInSeconds;
+		      	neuronObj.maxSteps = neuron.maxSteps;
 		      	break;
 		      case 'NoteNeuron':
-		      	neuronObj['noteMIDI'] = neuron.note;
+		      	neuronObj.noteMIDI = neuron.note;
 		      	break;
 	    	}
 

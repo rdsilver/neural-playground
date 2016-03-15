@@ -1,4 +1,4 @@
-'use strict'
+'use strict';
 
 class ActionPotential {
 	constructor(sourceNeuron, destinyNeuron, skew, id, charge, neuronSize) {

@@ -26,7 +26,7 @@ class NoteNeuron extends Neuron {
 	}
 
 	activate() {
-		osc.amp(.05);
+		osc.amp(0.05);
 		osc.freq(midiToFreq(this.note));
 		_.each(this.outBoundConnections, otherNeuron => {
 			let id = _.uniqueId();

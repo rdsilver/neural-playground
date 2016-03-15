@@ -1,23 +1,23 @@
 body   { 
 	padding: 0;
-    margin: 0;
+  margin: 0;
 	background: #000000;
 	font-family: 'Roboto', sans-serif;
 	overflow: hidden;
-    -webkit-user-select: none;  /* Chrome all / Safari all */
-    -moz-user-select: none;     /* Firefox all */
-    -ms-user-select: none;      /* IE 10+ */
-    user-select: none;          /* Likely future */  
+  -webkit-user-select: none;  /* Chrome all / Safari all */
+  -moz-user-select: none;     /* Firefox all */
+  -ms-user-select: none;      /* IE 10+ */
+  user-select: none;          /* Likely future */  
 } 
 
 p {
-	margin: 10px 0px 5px 0px;
+	margin: 10px 0 5px 0;
 	font-size: 18px;
 	border-bottom: 1px solid black;
 }
 
 a:visited { 
-    color: blue;
+  color: blue;
 }
 
 #control-panel {
@@ -41,7 +41,6 @@ a:visited {
 }
 
 #timerInput {
-	width: 50px;
 	display: inline;
 }
 
@@ -58,14 +57,14 @@ a:visited {
 	top:97%;
 	right:0%;
 	background-color: white;
-    font-size: 14px;
+  font-size: 14px;
 }
 
 #exampleInput {
 	padding-top: 1px;
 }
 
-#control-panel div.active { 
+#control-panel .active { 
 	background-color: rgb(200, 200, 200);
 }
 

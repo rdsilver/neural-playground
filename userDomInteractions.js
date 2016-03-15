@@ -1,3 +1,5 @@
+'use strict';
+
 var prevState;
 var controlPanel = {
 	onControlPanelClick: function() {
@@ -56,7 +58,7 @@ var controlPanel = {
 			});
 		});
 	}
-}
+};
 
 var exampleSelection = {
 	addExamples: function() {
@@ -74,7 +76,7 @@ var exampleSelection = {
 		clearScreen();
 		Neuron.loadExample($(this).val());
 	}
-}
+};
 
 $(function() {
 	controlPanel.addMusicalNotes();
