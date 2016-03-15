@@ -104,7 +104,7 @@ function mouseHover() {
   }
 }
 
-// Create neuron on spot if none exists, else delete
+// Create neuron on spot if none exists, otherwise delete neuron at that spot
 function placeNeurons(x, y) {
   if (!neuronList[`${x} ${y}`]) {
     Neuron.createNeuron(x, y);
