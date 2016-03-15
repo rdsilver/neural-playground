@@ -10,7 +10,7 @@ var sketchOptions = {
   cellSize : 30,
   bgColor : 50,
   gridColor : 75,
-  canvasName: 'defaultCanvas0'
+  canvasId: 'defaultCanvas0'
 };
 
 function setup() {
@@ -70,7 +70,7 @@ function clearScreen(keepGrid) {
 }
 
 function mouseClicked(event) {
-  if (event.target.id !== sketchOptions.canvasName) {
+  if (event.target.id !== sketchOptions.canvasId) {
     return;
   }
 
