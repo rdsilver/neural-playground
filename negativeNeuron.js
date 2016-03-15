@@ -8,7 +8,7 @@ class NegativeNeuron extends Neuron {
 
 	display() {
 		this.selected ? fill(200, 200, 60) : fill(0, 100, 200);
-		stroke(gridColor);
+		stroke(sketchOptions.gridColor);
 		rect(this.xCoord, this.yCoord, this.size, this.size);
 	}
 }

@@ -15,11 +15,11 @@ class ActionPotential {
 		this.destinyX = destinyNeuron.xCoord + skew;
 		this.destinyY = destinyNeuron.yCoord + skew;
 
-        let length = Math.sqrt(Math.pow(this.destinyX-this.xCoord, 2) + Math.pow(this.destinyY-this.yCoord, 2));
-        this.xSlope = (this.destinyX-this.xCoord)/length * 2;
-        this.ySlope = (this.destinyY-this.yCoord)/length * 2;
-        this.maxSteps = this.xSlope === 0 ? (this.destinyY-this.yCoord)/this.ySlope : (this.destinyX-this.xCoord)/this.xSlope;
-        this.steps = 0; 
+    let length = Math.sqrt(Math.pow(this.destinyX-this.xCoord, 2) + Math.pow(this.destinyY-this.yCoord, 2));
+    this.xSlope = (this.destinyX-this.xCoord)/length * 2;
+    this.ySlope = (this.destinyY-this.yCoord)/length * 2;
+    this.maxSteps = this.xSlope === 0 ? (this.destinyY-this.yCoord)/this.ySlope : (this.destinyX-this.xCoord)/this.xSlope;
+    this.steps = 0; 
 	}
 
 

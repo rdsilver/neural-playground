@@ -3,7 +3,7 @@
 class Neuron {
 	constructor(x, y, neuronSize, actlvl) {
 		this.xCoord = x;
-		this.yCoord = y;
+	  this.yCoord = y;
 		this.size = neuronSize;
 		this.activationLevel = actlvl;
 		this.curCharge = 0;
@@ -16,7 +16,7 @@ class Neuron {
 
 	display() {
 		this.selected ? fill(200, 200, 60) : fill(100, 200, 0);
-		stroke(gridColor);
+		stroke(sketchOptions.gridColor);
 		rect(this.xCoord, this.yCoord, this.size, this.size);
 	}
 
@@ -31,8 +31,8 @@ class Neuron {
 	}
 
 	erase() {
-		stroke(gridColor);
-		fill(bgColor); 
+		stroke(sketchOptions.gridColor);
+		fill(sketchOptions.bgColor); 
 		rect(this.xCoord, this.yCoord, this.size, this.size);
 	}
 
@@ -178,19 +178,19 @@ class Neuron {
 	    let tempNeuron = undefined;
 	    switch (neuronType) {
 	      case 'normal':
-	        tempNeuron = new Neuron(x, y, cellSize, activationLevel);
+	        tempNeuron = new Neuron(x, y, sketchOptions.cellSize, activationLevel);
 	        break;
 	      case 'character':
-	        tempNeuron = new CharacterNeuron(x, y, cellSize, activationLevel);
+	        tempNeuron = new CharacterNeuron(x, y, sketchOptions.cellSize, activationLevel);
 	        break;
 	      case 'negative':
-	      	tempNeuron = new NegativeNeuron(x, y, cellSize, activationLevel);
+	      	tempNeuron = new NegativeNeuron(x, y, sketchOptions.cellSize, activationLevel);
 	      	break;
 	      case 'timer': 
-	      	tempNeuron = new TimerNeuron(x, y, cellSize, activationLevel, timeInSeconds, maxSteps);
+	      	tempNeuron = new TimerNeuron(x, y, sketchOptions.cellSize, activationLevel, timeInSeconds, maxSteps);
 	      	break;
 	      case 'note':
-	      	tempNeuron = new NoteNeuron(x, y, cellSize, activationLevel, noteMIDI);
+	      	tempNeuron = new NoteNeuron(x, y, sketchOptions.cellSize, activationLevel, noteMIDI);
 	      	break;
 
 	    }

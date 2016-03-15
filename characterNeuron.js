@@ -8,7 +8,7 @@ class CharacterNeuron extends Neuron {
 
 	display() {
 		this.selected ? fill(200, 200, 60) : fill(255, 255, 255);
-		stroke(gridColor);
+		stroke(sketchOptions.gridColor);
 		rect(this.xCoord, this.yCoord, this.size, this.size);
 		fill(0);
 		textAlign(CENTER);

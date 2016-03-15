@@ -1,32 +1,35 @@
 'use strict';
 
-var cellSize = 30;
 var neuronList = {};
 var actionPotentialList = {};
 var state = 'neuronPlacement';
-var neuronType = 'normal'
+var neuronType = 'normal';
 var selectedNeuron = false;
-var bgColor = 50;
-var gridColor = 75;
+
+var sketchOptions = {
+  cellSize : 30,
+  bgColor : 50,
+  gridColor : 75
+};
 
 function setup() {
   createCanvas(window.innerWidth, window.innerHeight-100);
-  background(bgColor);
+  background(sketchOptions.bgColor);
   drawGraphLines();
 }
 
 function drawGraphLines() {
-  var cols = _.ceil(width/cellSize);
-  var rows = _.ceil(height/cellSize);
+  var cols = _.ceil(width/sketchOptions.cellSize);
+  var rows = _.ceil(height/sketchOptions.cellSize);
 
-  stroke(gridColor);
+  stroke(sketchOptions.gridColor);
   _.times(cols, c => {
-    c = c*cellSize;
+    c = c*sketchOptions.cellSize;
     line(c, 0, c, height);
   });
 
   _.times(rows, r => {
-    r = r*cellSize;
+    r = r*sketchOptions.cellSize;
     line(0, r, width, r);
   });
 }
@@ -55,7 +58,7 @@ function draw() {
 function clearScreen(keepGrid) {
   keepGrid = keepGrid === undefined;
 
-  fill(bgColor);
+  fill(sketchOptions.bgColor);
   noStroke();
   rect(0, 0, width, height);
 
@@ -67,8 +70,8 @@ function mouseClicked() {
   if (mouseY < 0)
     return;
 
-  var x = mouseX - (mouseX % cellSize);
-  var y = mouseY - (mouseY % cellSize);
+  var x = mouseX - (mouseX % sketchOptions.cellSize);
+  var y = mouseY - (mouseY % sketchOptions.cellSize);
 
   switch(state) {
     case 'neuronPlacement':
@@ -87,12 +90,12 @@ function mouseHover() {
   if (mouseY < 0)
     return;
 
-  var x = mouseX - (mouseX % cellSize);
-  var y = mouseY - (mouseY % cellSize);
+  var x = mouseX - (mouseX % sketchOptions.cellSize);
+  var y = mouseY - (mouseY % sketchOptions.cellSize);
 
   if (!neuronList[`${x} ${y}`]) {
-    fill(gridColor);
-    rect(x, y, cellSize, cellSize);
+    fill(sketchOptions.gridColor);
+    rect(x, y, sketchOptions.cellSize, sketchOptions.cellSize);
   }
 }
 
