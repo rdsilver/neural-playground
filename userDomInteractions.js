@@ -75,7 +75,8 @@ var exampleSelection = {
 		Neuron.resetNeurons();
 		clearScreen();
 		Neuron.loadExample($(this).val());
-	}
+	},
+
 };
 
 $(function() {

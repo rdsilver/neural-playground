@@ -9,7 +9,8 @@ var selectedNeuron = false;
 var sketchOptions = {
   cellSize : 30,
   bgColor : 50,
-  gridColor : 75
+  gridColor : 75,
+  canvasName: 'defaultCanvas0'
 };
 
 function setup() {
@@ -68,8 +69,8 @@ function clearScreen(keepGrid) {
   }
 }
 
-function mouseClicked() {
-  if (mouseY < 0) {
+function mouseClicked(event) {
+  if (event.target.id !== sketchOptions.canvasName) {
     return;
   }
 
