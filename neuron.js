@@ -43,6 +43,11 @@ class Neuron {
 	addCharge(charge) {
 		this.curCharge += charge;
 
+    // TESTING
+    if (this.curCharge < 0) {
+      this.curCharge = 0;
+    }
+
 		if (this.curCharge >= this.activationLevel) {
 			this.curCharge = 0;
 			this.activate();
