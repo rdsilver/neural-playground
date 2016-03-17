@@ -16,3 +16,6 @@ Click anywhere in the "live" panel to switch to live mode. Click on a cell to ad
 Timer Neurons ignore inbound action potentials and just continue do activate every X seconds.
 
 This is a WIP and new features will be added along side a better GUI. You can track what is being worked on in the github ISSUES. Feel free to add your own neurons / work on other features and give me a pull request.
+
+If you add a neuron, please make sure all tests pass and to add relevant testing methods
+http://rdsilver.github.io/neural-playground/jasmine/SpecRunner.html?
