@@ -1,87 +1,87 @@
-body   { 
-	padding: 0;
+body   {
+  padding: 0;
   margin: 0;
-	background: #000000;
-	font-family: 'Roboto', sans-serif;
-	overflow: hidden;
+  background: #000000;
+  font-family: 'Roboto', sans-serif;
+  overflow: hidden;
   -webkit-user-select: none;  /* Chrome all / Safari all */
   -moz-user-select: none;     /* Firefox all */
   -ms-user-select: none;      /* IE 10+ */
-  user-select: none;          /* Likely future */  
-} 
-
-p {
-	margin: 10px 0 5px 0;
-	font-size: 18px;
-	border-bottom: 1px solid black;
+  user-select: none;          /* Likely future */
 }
 
-a:visited { 
+p {
+  margin: 10px 0 5px 0;
+  font-size: 18px;
+  border-bottom: 1px solid black;
+}
+
+a:visited {
   color: blue;
 }
 
 #control-panel {
-	width: 100%;
-	height: 100px;
+  width: 100%;
+  height: 100px;
 }
 
-#control-panel div{ 
-	background-color: rgb(110, 110, 110);
-	box-sizing: border-box;
-	border-right: 2px solid black;
-	text-align: center;
+#control-panel div{
+  background-color: rgb(110, 110, 110);
+  box-sizing: border-box;
+  border-right: 2px solid black;
+  text-align: center;
 }
 
 #neuronType {
-	margin-bottom:5px;	
+  margin-bottom:5px;
 }
 
 #activationLevel {
-	width: 35px;
+  width: 35px;
 }
 
 #timerInput {
-	display: inline;
+  display: inline;
 }
 
 #timesInput {
-	width: 100px;
+  width: 100px;
 }
 
 #noteInput {
-	width: 55px;
+  width: 55px;
 }
 
 #loadExamples {
-	position: absolute;
-	top:97%;
-	right:0%;
-	background-color: white;
+  position: absolute;
+  top:97%;
+  right:0%;
+  background-color: white;
   font-size: 14px;
 }
 
 #exampleInput {
-	padding-top: 1px;
+  padding-top: 1px;
 }
 
-#control-panel .active { 
-	background-color: rgb(200, 200, 200);
+#control-panel .active {
+  background-color: rgb(200, 200, 200);
 }
 
-.column-left{ 
-	float: left;
-	width: 33.33%; 
-	height: 100%;
+.column-left{
+  float: left;
+  width: 33.33%;
+  height: 100%;
 }
 
-.column-right{ 
-	float: right; 
-	width: 33.33%; 
-	height: 100%;
+.column-right{
+  float: right;
+  width: 33.33%;
+  height: 100%;
 }
 
-.column-center{ 
-	display: inline-block; 
-	width: 33.33%; 
-	height: 100%;
+.column-center{
+  display: inline-block;
+  width: 33.33%;
+  height: 100%;
 }

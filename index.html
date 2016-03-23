@@ -1,6 +1,6 @@
 <html>
-	<head>
-	  <meta charset='UTF-8'>
+  <head>
+    <meta charset='UTF-8'>
       <script src='https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.6.1/lodash.min.js'></script>
       <script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
       <script src='https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.4.20/p5.min.js'></script>
@@ -14,60 +14,60 @@
       <script src='exampleNeuronNets.js'></script>
       <script src='sketch.js'></script>
       <script src='userDomInteractions.js'></script>
-	  <link rel='shortcut icon' type='image/x-icon' href='favicon.ico' />
-	  <link rel='stylesheet' type='text/css' href='style.css'>
-	  <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet' type='text/css'>
-	  <title>Neural Playground</title>
-	</head>
+    <link rel='shortcut icon' type='image/x-icon' href='favicon.ico' />
+    <link rel='stylesheet' type='text/css' href='style.css'>
+    <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet' type='text/css'>
+    <title>Neural Playground</title>
+  </head>
 
-	<body>
-		<div id='control-panel'>
-			<div id='neuron-placement' class='column-left active' data-state='neuronPlacement'>
-				<p>Place/Delete Neurons</p>
-				Neuron Type: 
-				<select id='neuronType'>
-				  <option value='normal'>Normal</option>
-				  <option value='character'>Character</option>
-				  <option value='negative'>Negative</option>
-				  <option value='timer'>Timer</option>
-				  <option value='note'>Note</option>
-				</select><br>
+  <body>
+    <div id='control-panel'>
+      <div id='neuron-placement' class='column-left active' data-state='neuronPlacement'>
+        <p>Place/Delete Neurons</p>
+        Neuron Type:
+        <select id='neuronType'>
+          <option value='normal'>Normal</option>
+          <option value='character'>Character</option>
+          <option value='negative'>Negative</option>
+          <option value='timer'>Timer</option>
+          <option value='note'>Note</option>
+        </select><br>
 
-				<span id='activationLevelSpan'>
-					Activation Level: 
-					<input type='number' name='quantity' min='1' max='36' value='2' id='activationLevel'>
-				</span>
+        <span id='activationLevelSpan'>
+          Activation Level:
+          <input type='number' name='quantity' min='1' max='36' value='2' id='activationLevel'>
+        </span>
 
-				<span id='timerInputSpan' hidden>
-					Timer in Seconds: 
-					<input type='number' min='.25' max='10' value='1' step='.25' id='timerActivationInput'>
-					Times
-					<input type='number' min='-1' max='500' placeholder='-1 for forever' step='1' id='timesInput'>
-				</span>
+        <span id='timerInputSpan' hidden>
+          Timer in Seconds:
+          <input type='number' min='.25' max='10' value='1' step='.25' id='timerActivationInput'>
+          Times
+          <input type='number' min='-1' max='500' placeholder='-1 for forever' step='1' id='timesInput'>
+        </span>
 
-				<span id='noteInputSpan' hidden>
-					<a target="_blank" href='https://newt.phys.unsw.edu.au/jw/graphics/notesinvert.GIF'>Notes C1 - C8</a>: 
-					<select id='noteInput'> 
-					</select>
-				</span>
-			</div>
+        <span id='noteInputSpan' hidden>
+          <a target="_blank" href='https://newt.phys.unsw.edu.au/jw/graphics/notesinvert.GIF'>Notes C1 - C8</a>:
+          <select id='noteInput'>
+          </select>
+        </span>
+      </div>
 
-			<div id='connection-placement' class='column-center' data-state='connectionPlacement'>
-				<p>Place/Delete Connections</p>
-				<input type="radio" name="connection" value="one" checked> One-way connections<br>
-  				<input type="radio" name="connection" value="two"> Two-way connections
-			</div>
+      <div id='connection-placement' class='column-center' data-state='connectionPlacement'>
+        <p>Place/Delete Connections</p>
+        <input type="radio" name="connection" value="one" checked> One-way connections<br>
+          <input type="radio" name="connection" value="two"> Two-way connections
+      </div>
 
-			<div id='live-mode' class='column-right' data-state='live'>
-				<p>Live Mode</p>
-			</div>
-		</div>
+      <div id='live-mode' class='column-right' data-state='live'>
+        <p>Live Mode</p>
+      </div>
+    </div>
 
-		<span id='loadExamples'>
-			Load Example:
-			<select placeholder='Select Example' id='exampleInput'>
-				<option value="" disabled selected>Select Example</option>
-			</select>
-		</span>
-	</body>
+    <span id='loadExamples'>
+      Load Example:
+      <select placeholder='Select Example' id='exampleInput'>
+        <option value="" disabled selected>Select Example</option>
+      </select>
+    </span>
+  </body>
 </html>
