@@ -1,12 +1,11 @@
-'use strict';
-
 // Oscillator
 var osc;
 osc = new p5.Oscillator();
 osc.setType('triangle');
-var twelveTones = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 osc.start();
 osc.amp(0);
+
+var twelveTones = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 
 class NoteNeuron extends Neuron {
   constructor(x, y, neuronSize, actlvl, note) {

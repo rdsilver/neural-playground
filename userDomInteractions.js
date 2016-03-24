@@ -1,5 +1,3 @@
-'use strict';
-
 var prevState;
 var controlPanel = {
   onControlPanelClick: function() {

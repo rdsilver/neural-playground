@@ -1,5 +1,3 @@
-'use strict';
-
 class Neuron {
   constructor(x, y, neuronSize, actlvl) {
     this.xCoord = x;

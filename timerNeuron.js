@@ -1,5 +1,3 @@
-'use strict';
-
 class TimerNeuron extends Neuron {
   constructor(x, y, neuronSize, actlvl, timeInSeconds, maxSteps) {
     super(x, y, neuronSize, actlvl);

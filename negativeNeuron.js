@@ -1,5 +1,3 @@
-'use strict';
-
 class NegativeNeuron extends Neuron {
   constructor(x, y, neuronSize, actlvl) {
     super(x, y, neuronSize, actlvl);

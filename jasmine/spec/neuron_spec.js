@@ -1,5 +1,3 @@
-'use strict';
-
 describe('Neuron Class Methods', () => {
 	beforeEach(() => {
 		this.neuron = new Neuron(1, 1, 5, 5);

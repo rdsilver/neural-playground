@@ -26,7 +26,6 @@ a:visited {
 }
 
 #control-panel div{
-  background-color: rgb(110, 110, 110);
   box-sizing: border-box;
   border-right: 2px solid black;
   text-align: center;
@@ -66,6 +65,10 @@ a:visited {
 
 #control-panel .active {
   background-color: rgb(200, 200, 200);
+}
+
+.grey {
+  background-color: rgb(110, 110, 110);
 }
 
 .column-left{

@@ -1,5 +1,3 @@
-'use strict';
-
 var neuronList = {};
 var actionPotentialList = {};
 var state = 'neuronPlacement';

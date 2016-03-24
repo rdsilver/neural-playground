@@ -14,6 +14,7 @@
       <script src='exampleNeuronNets.js'></script>
       <script src='sketch.js'></script>
       <script src='userDomInteractions.js'></script>
+      <script src='neuronInfo.js'></script>
     <link rel='shortcut icon' type='image/x-icon' href='favicon.ico' />
     <link rel='stylesheet' type='text/css' href='style.css'>
     <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet' type='text/css'>
@@ -22,7 +23,7 @@
 
   <body>
     <div id='control-panel'>
-      <div id='neuron-placement' class='column-left active' data-state='neuronPlacement'>
+      <div id='neuron-placement' class='column-left active grey' data-state='neuronPlacement'>
         <p>Place/Delete Neurons</p>
         Neuron Type:
         <select id='neuronType'>
@@ -52,18 +53,18 @@
         </span>
       </div>
 
-      <div id='connection-placement' class='column-center' data-state='connectionPlacement'>
+      <div id='connection-placement' class='column-center grey' data-state='connectionPlacement'>
         <p>Place/Delete Connections</p>
         <input type="radio" name="connection" value="one" checked> One-way connections<br>
           <input type="radio" name="connection" value="two"> Two-way connections
       </div>
 
-      <div id='live-mode' class='column-right' data-state='live'>
+      <div id='live-mode' class='column-right grey' data-state='live'>
         <p>Live Mode</p>
       </div>
     </div>
 
-    <span id='loadExamples'>
+    <span class='grey' id='loadExamples'>
       Load Example:
       <select placeholder='Select Example' id='exampleInput'>
         <option value="" disabled selected>Select Example</option>
