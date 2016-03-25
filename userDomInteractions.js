@@ -32,21 +32,10 @@ var controlPanel = {
 
   changeNeuronType: function() {
     var neuronType = $(this).val();
+
     // Hide all spans then just show the applicable ones
     _.each($('#neuron-placement span'), span => $(span).hide());
-
-    // TODO refactor this into neuronInfo.js
-    switch(neuronType) {
-      case 'TimerNeuron':
-        $('#timerInputSpan').show();
-        break;
-      case 'NoteNeuron':
-        $('#activationLevelSpan').show();
-        $('#noteInputSpan').show();
-        break;
-      default:
-        $('#activationLevelSpan').show();
-    }
+    neuronInfo[neuronType].inputsToShow();
   },
 
   addNeuronTypes: function() {

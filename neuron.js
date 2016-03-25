@@ -206,7 +206,6 @@ class Neuron {
 
     static saveExample() {
       var neurons = [];
-
       _.each(neuronList, neuron => {
         let neuronType = neuron.constructor.name;
         let neuronObj = {};
@@ -219,8 +218,7 @@ class Neuron {
         neuronObj.outBounds = _.keys(neuron.outBoundConnections);
         neuronObj.inBounds = _.keys(neuron.inBoundConnections);
 
-        // TODO FIX THIS
-        _.each(neuronInfo[neuronType], extraInfo => {
+        _.each(neuronInfo[neuronType].extraFields, extraInfo => {
           neuronObj[extraInfo] = neuron[extraInfo];
         });
 
