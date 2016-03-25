@@ -5,7 +5,7 @@ View the project here http://rdsilver.github.io/neural-playground/
 (Only tested in Chrome)
 (Once this is a RoR app I will compile with Babel so everyone can use)
 
-Instructions:
+##Instructions:
 
 Click on a cell when in "Place/Delete neuron mode" to place a neuron there of your choosing. To delete a neuron at a cell, click on it while in "Place/Delete neuron mode" To change neuron type choose an option from the dropdown menu
 
@@ -15,7 +15,9 @@ Click anywhere in the "live" panel to switch to live mode. Click on a cell to ad
 
 Timer Neurons ignore inbound action potentials and just continue do activate every X seconds.
 
-This is a WIP and new features will be added along side a better GUI. You can track what is being worked on in the github ISSUES. Feel free to add your own neurons / work on other features and give me a pull request.
+This is a WIP and new features will be added along side a better GUI. You can track what is being worked on in the github ISSUES.
 
-If you add a neuron, please make sure all tests pass and to add relevant testing methods
+
+### Adding your own neuron/features
+If you add a neuron/feature, please make sure all tests pass and to add relevant testing methods
 http://rdsilver.github.io/neural-playground/jasmine/SpecRunner.html?
