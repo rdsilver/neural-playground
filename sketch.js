@@ -8,11 +8,12 @@ var sketchOptions = {
   cellSize : 30,
   bgColor : 50,
   gridColor : 75,
+  controlPanelSize: 100,
   canvasId: 'defaultCanvas0'
 };
 
 function setup() {
-  createCanvas(window.innerWidth, window.innerHeight-100);
+  createCanvas(window.innerWidth, window.innerHeight - sketchOptions.controlPanelSize);
   background(sketchOptions.bgColor);
   drawGraphLines();
 }
@@ -129,6 +130,6 @@ function live(x, y) {
 }
 
 function windowResized() {
-  resizeCanvas(window.innerWidth, window.innerHeight - 100);
+  resizeCanvas(window.innerWidth, window.innerHeight - sketchOptions.controlPanelSize);
   clearScreen();
 }
