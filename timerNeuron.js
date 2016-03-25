@@ -14,11 +14,11 @@ class TimerNeuron extends Neuron {
   display() {
     this.selected ? fill(200, 200, 60) : fill(160, 130, 250);
     stroke(sketchOptions.gridColor);
-    rect(this.xCoord, this.yCoord, this.size, this.size);
+    rect(this.x, this.y, this.size, this.size);
     fill(0);
     textAlign(CENTER);
     textSize(this.size);
-    text('T', this.xCoord + this.size/2, this.yCoord + this.size/1.15);
+    text('T', this.x + this.size/2, this.y + this.size/1.15);
   }
 
   neuronSpecificRoutine() {

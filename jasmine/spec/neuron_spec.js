@@ -5,8 +5,8 @@ describe('Neuron Class Methods', () => {
 	});
 
 	it('should create a neuron with specific attributes', () => {
-		expect(this.neuron.xCoord).toEqual(1);
-		expect(this.neuron.yCoord).toEqual(1);
+		expect(this.neuron.x).toEqual(1);
+		expect(this.neuron.y).toEqual(1);
 		expect(this.neuron.size).toEqual(5);
 		expect(this.neuron.activationLevel).toEqual(5);
 	});

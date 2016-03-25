@@ -1,7 +1,7 @@
 class Neuron {
   constructor(x, y, neuronSize, actlvl) {
-    this.xCoord = x;
-    this.yCoord = y;
+    this.x = x;
+    this.y = y;
     this.size = neuronSize;
     this.activationLevel = actlvl;
     this.curCharge = 0;
@@ -15,7 +15,7 @@ class Neuron {
   display() {
     this.selected ? fill(200, 200, 60) : fill(100, 200, 0);
     stroke(sketchOptions.gridColor);
-    rect(this.xCoord, this.yCoord, this.size, this.size);
+    rect(this.x, this.y, this.size, this.size);
   }
 
   displayConnections() {
@@ -24,14 +24,14 @@ class Neuron {
     // skew centers the connection to the middle of the neuron
     var skew = this.size/2.0;
     _.each(this.outBoundConnections, outBoundNeuron => {
-      line(this.xCoord+skew, this.yCoord+skew, outBoundNeuron.xCoord+skew, outBoundNeuron.yCoord+skew);
+      line(this.x+skew, this.y+skew, outBoundNeuron.x+skew, outBoundNeuron.y+skew);
     });
   }
 
   erase() {
     stroke(sketchOptions.gridColor);
     fill(sketchOptions.bgColor);
-    rect(this.xCoord, this.yCoord, this.size, this.size);
+    rect(this.x, this.y, this.size, this.size);
   }
 
   reset() {
@@ -60,7 +60,7 @@ class Neuron {
 
   // Toggles an inbound connection between two neurons
   inBoundConnection(otherNeuron) {
-    var index = `${otherNeuron.xCoord} ${otherNeuron.yCoord}`;
+    var index = `${otherNeuron.x} ${otherNeuron.y}`;
 
     if (!this.inBoundConnections[index]) {
       this.inBoundConnections[index] = otherNeuron;
@@ -72,7 +72,7 @@ class Neuron {
 
   // Toggles an outbound connection between two neurons
   outBoundConnection(otherNeuron) {
-    var index = `${otherNeuron.xCoord} ${otherNeuron.yCoord}`;
+    var index = `${otherNeuron.x} ${otherNeuron.y}`;
 
     if (!this.outBoundConnections[index]) {
       this.outBoundConnections[index] = otherNeuron;
@@ -84,7 +84,7 @@ class Neuron {
 
   // Removes any connections to a neuron that no longer exists
   removeConnection(otherNeuron) {
-    var index = `${otherNeuron.xCoord} ${otherNeuron.yCoord}`;
+    var index = `${otherNeuron.x} ${otherNeuron.y}`;
     if (this.inBoundConnections[index]) {
       delete this.inBoundConnections[index];
       clearScreen();
@@ -169,31 +169,14 @@ class Neuron {
     }
 
     static createNeuron(x, y) {
-      var activationLevel = parseInt($('#activationLevel').val());
-      var timeInSeconds = parseFloat($('#timerActivationInput').val());
-      var maxSteps = parseFloat(parseInt($('#timesInput').val()));
-      var noteMIDI = parseInt($('#noteInput').val());
+      var neuronType = $('#neuronType').val();
+      var neuronObj = {x:x, y:y};
 
-      var tempNeuron;
-      switch (neuronType) {
-        case 'normal':
-          tempNeuron = new Neuron(x, y, sketchOptions.cellSize, activationLevel);
-          break;
-        case 'character':
-          tempNeuron = new CharacterNeuron(x, y, sketchOptions.cellSize, activationLevel);
-          break;
-        case 'negative':
-          tempNeuron = new NegativeNeuron(x, y, sketchOptions.cellSize, activationLevel);
-          break;
-        case 'timer':
-          tempNeuron = new TimerNeuron(x, y, sketchOptions.cellSize, activationLevel, timeInSeconds, maxSteps);
-          break;
-        case 'note':
-          tempNeuron = new NoteNeuron(x, y, sketchOptions.cellSize, activationLevel, noteMIDI);
-          break;
-      }
+      _.each(neuronInfo.fields, (field, key) => {
+        neuronObj[key] = field();
+      });
 
-      neuronList[`${x} ${y}`] = tempNeuron;
+      neuronList[`${x} ${y}`] = neuronInfo[neuronType].Create(neuronObj);
     }
 
     static loadExample(exampleName) {
@@ -201,46 +184,24 @@ class Neuron {
       neuronList = {};
       actionPotentialList = {};
 
-    // Adds the neurons to the neuronLists without their connections
-    _.each(exampleNeuronNet, neuron => {
-      let neuronType = neuron.type;
-      let tempNeuron;
-
-      switch (neuronType) {
-          case 'Neuron':
-            tempNeuron = new Neuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
-            break;
-          case 'CharacterNeuron':
-            tempNeuron = new CharacterNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
-            break;
-          case 'NegativeNeuron':
-            tempNeuron = new NegativeNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel);
-            break;
-          case 'TimerNeuron':
-            neuron.maxSteps = neuron.maxSteps ? neuron.maxSteps : -1;
-            tempNeuron = new TimerNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel, neuron.timeInSeconds, neuron.maxSteps);
-            break;
-          case 'NoteNeuron':
-            tempNeuron = new NoteNeuron(neuron.x, neuron.y, neuron.size, neuron.activationLevel, neuron.noteMIDI);
-            break;
-
-        }
-
+      // Adds the neurons to the neuronLists without their connections
+      _.each(exampleNeuronNet, neuron => {
+        let tempNeuron = neuronInfo[neuron.type].Create(neuron);
         neuronList[`${neuron.x} ${neuron.y}`] = tempNeuron;
-    });
-
-    // Adds connections
-    _.each(exampleNeuronNet, neuron => {
-      let tempNeuron = neuronList[`${neuron.x} ${neuron.y}`];
-
-      _.each(neuron.outBounds, outBoundNeuron =>{
-        tempNeuron.outBoundConnection(neuronList[outBoundNeuron]);
       });
 
-      _.each(neuron.inBounds, inBoundNeuron =>{
-        tempNeuron.inBoundConnection(neuronList[inBoundNeuron]);
+      // Adds connections
+      _.each(exampleNeuronNet, neuron => {
+        let tempNeuron = neuronList[`${neuron.x} ${neuron.y}`];
+
+        _.each(neuron.outBounds, outBoundNeuron =>{
+          tempNeuron.outBoundConnection(neuronList[outBoundNeuron]);
+        });
+
+        _.each(neuron.inBounds, inBoundNeuron =>{
+          tempNeuron.inBoundConnection(neuronList[inBoundNeuron]);
+        });
       });
-    });
     }
 
     static saveExample() {
@@ -251,22 +212,17 @@ class Neuron {
         let neuronObj = {};
 
         neuronObj.type = neuronType;
-        neuronObj.x = neuron.xCoord;
-        neuronObj.y = neuron.yCoord;
+        neuronObj.x = neuron.x;
+        neuronObj.y = neuron.y;
         neuronObj.size = neuron.size;
         neuronObj.activationLevel = neuron.activationLevel;
         neuronObj.outBounds = _.keys(neuron.outBoundConnections);
         neuronObj.inBounds = _.keys(neuron.inBoundConnections);
 
-        switch (neuronType) {
-          case 'TimerNeuron':
-            neuronObj.timeInSeconds = neuron.timeInSeconds;
-            neuronObj.maxSteps = neuron.maxSteps;
-            break;
-          case 'NoteNeuron':
-            neuronObj.noteMIDI = neuron.note;
-            break;
-        }
+        // TODO FIX THIS
+        _.each(neuronInfo[neuronType], extraInfo => {
+          neuronObj[extraInfo] = neuron[extraInfo];
+        });
 
         neurons.push(neuronObj);
       });

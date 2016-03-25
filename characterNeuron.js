@@ -7,13 +7,13 @@ class CharacterNeuron extends Neuron {
   display() {
     this.selected ? fill(200, 200, 60) : fill(255, 255, 255);
     stroke(sketchOptions.gridColor);
-    rect(this.xCoord, this.yCoord, this.size, this.size);
+    rect(this.x, this.y, this.size, this.size);
     fill(0);
     textAlign(CENTER);
     textSize(this.size);
 
     let letter = '';
     this.curCharge < 0 ? letter = this.curCharge : letter = this.charIndex[this.curCharge];
-    text(letter, this.xCoord + this.size/2, this.yCoord + this.size/1.15);
+    text(letter, this.x + this.size/2, this.y + this.size/1.15);
   }
 }

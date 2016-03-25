@@ -1,10 +1,10 @@
 var prevState;
 var controlPanel = {
   onControlPanelClick: function() {
-    $('#control-panel div').click(controlPanel.changeState);
+    $('#control-panel div').on('click', controlPanel.changeState);
   },
 
-  changeState: function(event) {
+  changeState: function() {
     if(!$(this).hasClass('active')) {
       $('#control-panel div').removeClass('active');
       $(this).addClass('active');
@@ -30,23 +30,32 @@ var controlPanel = {
     $('#neuronType').change(controlPanel.changeNeuronType);
   },
 
-  changeNeuronType: function(event) {
-    neuronType = $(this).val();
-
+  changeNeuronType: function() {
+    var neuronType = $(this).val();
     // Hide all spans then just show the applicable ones
     _.each($('#neuron-placement span'), span => $(span).hide());
 
+    // TODO refactor this into neuronInfo.js
     switch(neuronType) {
-      case 'timer':
+      case 'TimerNeuron':
         $('#timerInputSpan').show();
         break;
-      case 'note':
+      case 'NoteNeuron':
         $('#activationLevelSpan').show();
         $('#noteInputSpan').show();
         break;
       default:
         $('#activationLevelSpan').show();
     }
+  },
+
+  addNeuronTypes: function() {
+    _.each(_.keys(neuronInfo), neuronType => {
+      // Make sure this field is a neuron type
+      if (neuronInfo[neuronType].selectName) {
+        $('#neuronType').append($('<option></option>').val(neuronType).html(neuronInfo[neuronType].selectName));
+      }
+    });
   },
 
   addMusicalNotes: function() {
@@ -69,15 +78,15 @@ var exampleSelection = {
     $('#exampleInput').change(exampleSelection.changeExample);
   },
 
-  changeExample: function(event) {
+  changeExample: function() {
     Neuron.resetNeurons();
     clearScreen();
     Neuron.loadExample($(this).val());
   },
-
 };
 
-$(function() {
+$(() => {
+  controlPanel.addNeuronTypes();
   controlPanel.addMusicalNotes();
   controlPanel.onControlPanelClick();
   controlPanel.onNeuronTypeChange();
