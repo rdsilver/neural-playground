@@ -179,6 +179,30 @@ class Neuron {
     neuronList[`${x} ${y}`] = neuronInfo[neuronType].Create(neuronObj);
   }
 
+  // Recursive method that takes a list of neurons and sets their key to match with a new cell size
+  static resizeNeuronList(tempNeuronList, newSize, oldSize, recurse) {
+    recurse = typeof recurse !== 'undefined' ? recurse : true;
+    var ratio = newSize/oldSize;
+    var newNeuronList = {};
+
+    _.each(tempNeuronList, neuron => {
+      if (neuron.size !== newSize) {
+        neuron.x = _.round(neuron.x * ratio);
+        neuron.y = _.round(neuron.y * ratio);
+        neuron.size = newSize;
+      }
+
+      if (recurse) {
+        neuron.outBoundConnections = Neuron.resizeNeuronList(neuron.outBoundConnections, newSize, oldSize, false);
+        neuron.inBoundConnections = Neuron.resizeNeuronList(neuron.inBoundConnections, newSize, oldSize, false);
+      }
+
+      newNeuronList[`${neuron.x} ${neuron.y}`] = neuron;
+    });
+
+    return newNeuronList;
+  }
+
   static loadExample(exampleName) {
     var exampleNeuronNet = JSON.parse(exampleNeuronNets[exampleName]);
     neuronList = {};

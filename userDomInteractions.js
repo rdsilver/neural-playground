@@ -71,6 +71,7 @@ var exampleSelection = {
     Neuron.resetNeurons();
     clearScreen();
     Neuron.loadExample($(this).val());
+    Neuron.resizeNeuronList(neuronList, $('#sizeInput').val(), 30);
   },
 };
 
@@ -83,21 +84,11 @@ var sizeSelection = {
   changeSize: function() {
     var newSize = $(this).val();
     var newNeuronList = {};
-    var ratio = newSize / sketchOptions.cellSize;
+    var oldSize = sketchOptions.cellSize;
 
-    _.each(neuronList, neuron => {
-      neuron.x *= ratio;
-      neuron.x = _.round(neuron.x);
-      neuron.y *= ratio;
-      neuron.y = _.round(neuron.y);
-      neuron.size = newSize;
-
-      newNeuronList[`${neuron.x} ${neuron.y}`] = neuron;
-    });
-
+    // TODO WRITE action potential resize
+    neuronList = Neuron.resizeNeuronList(neuronList, newSize, oldSize);
     sketchOptions.cellSize = newSize;
-    neuronList = newNeuronList;
-
     clearScreen();
   }
 };
