@@ -55,8 +55,18 @@ a:visited {
   position: absolute;
   top:97%;
   right:0%;
-  background-color: white;
   font-size: 14px;
+}
+
+#sizeSpan {
+  position: fixed;
+  left: 0;
+  top: 97%;
+  font-size: 14px;
+}
+
+#sizeInput {
+  width: 34px
 }
 
 #exampleInput {
@@ -69,6 +79,10 @@ a:visited {
 
 .grey {
   background-color: rgb(110, 110, 110);
+}
+
+.white {
+  background-color: white;
 }
 
 .column-left{

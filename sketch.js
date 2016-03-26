@@ -1,7 +1,6 @@
 var neuronList = {};
 var actionPotentialList = {};
 var state = 'neuronPlacement';
-var neuronType = 'normal';
 var selectedNeuron = false;
 
 var sketchOptions = {

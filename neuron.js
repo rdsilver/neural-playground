@@ -84,6 +84,7 @@ class Neuron {
 
   // Removes any connections to a neuron that no longer exists
   removeConnection(otherNeuron) {
+    console.log(otherNeuron);
     var index = `${otherNeuron.x} ${otherNeuron.y}`;
     if (this.inBoundConnections[index]) {
       delete this.inBoundConnections[index];
@@ -137,8 +138,8 @@ class Neuron {
 
   static deleteNeuron(x, y) {
     neuronList[`${x} ${y}`].erase();
-      _.each(neuronList, neuron => neuron.removeConnection(neuronList[`${x} ${y}`]));
-      delete neuronList[`${x} ${y}`];
+    _.each(neuronList, neuron => neuron.removeConnection(neuronList[`${x} ${y}`]));
+    delete neuronList[`${x} ${y}`];
   }
 
   static addConnection(x, y) {
@@ -153,78 +154,78 @@ class Neuron {
       }
     }
 
-    static selectNeuron(x, y) {
-      if (neuronList[`${x} ${y}`]) {
-        selectedNeuron = neuronList[`${x} ${y}`];
-        selectedNeuron.toggleSelected();
-      }
+  static selectNeuron(x, y) {
+    if (neuronList[`${x} ${y}`]) {
+      selectedNeuron = neuronList[`${x} ${y}`];
+      selectedNeuron.toggleSelected();
+    }
+  }
+
+  static unSelectNeuron() {
+    if (selectedNeuron) {
+      selectedNeuron.toggleSelected();
     }
 
-    static unSelectNeuron() {
-      if (selectedNeuron) {
-        selectedNeuron.toggleSelected();
-      }
+    selectedNeuron = false;
+  }
 
-      selectedNeuron = false;
-    }
+  static createNeuron(x, y) {
+    var neuronType = $('#neuronType').val();
+    var neuronObj = {x:x, y:y};
 
-    static createNeuron(x, y) {
-      var neuronType = $('#neuronType').val();
-      var neuronObj = {x:x, y:y};
+    _.each(neuronInfo.fields, (field, key) => {
+      neuronObj[key] = field();
+    });
 
-      _.each(neuronInfo.fields, (field, key) => {
-        neuronObj[key] = field();
+    neuronList[`${x} ${y}`] = neuronInfo[neuronType].Create(neuronObj);
+  }
+
+  static loadExample(exampleName) {
+    var exampleNeuronNet = JSON.parse(exampleNeuronNets[exampleName]);
+    neuronList = {};
+    actionPotentialList = {};
+
+    // Adds the neurons to the neuronLists without their connections
+    _.each(exampleNeuronNet, neuron => {
+      let tempNeuron = neuronInfo[neuron.type].Create(neuron);
+      neuronList[`${neuron.x} ${neuron.y}`] = tempNeuron;
+    });
+
+    // Adds connections
+    _.each(exampleNeuronNet, neuron => {
+      let tempNeuron = neuronList[`${neuron.x} ${neuron.y}`];
+
+      _.each(neuron.outBounds, outBoundNeuron =>{
+        tempNeuron.outBoundConnection(neuronList[outBoundNeuron]);
       });
 
-      neuronList[`${x} ${y}`] = neuronInfo[neuronType].Create(neuronObj);
-    }
+      _.each(neuron.inBounds, inBoundNeuron =>{
+        tempNeuron.inBoundConnection(neuronList[inBoundNeuron]);
+      });
+    });
+  }
 
-    static loadExample(exampleName) {
-      var exampleNeuronNet = JSON.parse(exampleNeuronNets[exampleName]);
-      neuronList = {};
-      actionPotentialList = {};
+  static saveExample() {
+    var neurons = [];
+    _.each(neuronList, neuron => {
+      let neuronType = neuron.constructor.name;
+      let neuronObj = {};
 
-      // Adds the neurons to the neuronLists without their connections
-      _.each(exampleNeuronNet, neuron => {
-        let tempNeuron = neuronInfo[neuron.type].Create(neuron);
-        neuronList[`${neuron.x} ${neuron.y}`] = tempNeuron;
+      neuronObj.type = neuronType;
+      neuronObj.x = neuron.x;
+      neuronObj.y = neuron.y;
+      neuronObj.size = neuron.size;
+      neuronObj.activationLevel = neuron.activationLevel;
+      neuronObj.outBounds = _.keys(neuron.outBoundConnections);
+      neuronObj.inBounds = _.keys(neuron.inBoundConnections);
+
+      _.each(neuronInfo[neuronType].extraFields, extraInfo => {
+        neuronObj[extraInfo] = neuron[extraInfo];
       });
 
-      // Adds connections
-      _.each(exampleNeuronNet, neuron => {
-        let tempNeuron = neuronList[`${neuron.x} ${neuron.y}`];
+      neurons.push(neuronObj);
+    });
 
-        _.each(neuron.outBounds, outBoundNeuron =>{
-          tempNeuron.outBoundConnection(neuronList[outBoundNeuron]);
-        });
-
-        _.each(neuron.inBounds, inBoundNeuron =>{
-          tempNeuron.inBoundConnection(neuronList[inBoundNeuron]);
-        });
-      });
-    }
-
-    static saveExample() {
-      var neurons = [];
-      _.each(neuronList, neuron => {
-        let neuronType = neuron.constructor.name;
-        let neuronObj = {};
-
-        neuronObj.type = neuronType;
-        neuronObj.x = neuron.x;
-        neuronObj.y = neuron.y;
-        neuronObj.size = neuron.size;
-        neuronObj.activationLevel = neuron.activationLevel;
-        neuronObj.outBounds = _.keys(neuron.outBoundConnections);
-        neuronObj.inBounds = _.keys(neuron.inBoundConnections);
-
-        _.each(neuronInfo[neuronType].extraFields, extraInfo => {
-          neuronObj[extraInfo] = neuron[extraInfo];
-        });
-
-        neurons.push(neuronObj);
-      });
-
-      return JSON.stringify(neurons);
-    }
+    return JSON.stringify(neurons);
+  }
 }

@@ -74,6 +74,34 @@ var exampleSelection = {
   },
 };
 
+
+var sizeSelection = {
+  onSizeChange: function() {
+    $('#sizeInput').change(sizeSelection.changeSize);
+  },
+
+  changeSize: function() {
+    var newSize = $(this).val();
+    var newNeuronList = {};
+    var ratio = newSize / sketchOptions.cellSize;
+
+    _.each(neuronList, neuron => {
+      neuron.x *= ratio;
+      neuron.x = _.round(neuron.x);
+      neuron.y *= ratio;
+      neuron.y = _.round(neuron.y);
+      neuron.size = newSize;
+
+      newNeuronList[`${neuron.x} ${neuron.y}`] = neuron;
+    });
+
+    sketchOptions.cellSize = newSize;
+    neuronList = newNeuronList;
+
+    clearScreen();
+  }
+};
+
 $(() => {
   controlPanel.addNeuronTypes();
   controlPanel.addMusicalNotes();
@@ -82,4 +110,6 @@ $(() => {
 
   exampleSelection.addExamples();
   exampleSelection.onExampleChange();
+
+  sizeSelection.onSizeChange();
 });
