@@ -84,7 +84,6 @@ class Neuron {
 
   // Removes any connections to a neuron that no longer exists
   removeConnection(otherNeuron) {
-    console.log(otherNeuron);
     var index = `${otherNeuron.x} ${otherNeuron.y}`;
     if (this.inBoundConnections[index]) {
       delete this.inBoundConnections[index];
