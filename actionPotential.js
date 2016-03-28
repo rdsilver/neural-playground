@@ -3,7 +3,7 @@ class ActionPotential {
     this.sourceNeuron = sourceNeuron;
     this.destinyNeuron = destinyNeuron;
 
-    this.size = neuronSize/5;
+    this.size = neuronSize/sketchOptions.actionPotentialDivisor;
     this.id = id;
     this.charge = charge;
 
@@ -23,7 +23,6 @@ class ActionPotential {
 
   display() {
     noStroke();
-
     this.charge > 0 ? fill(255) : fill(0);
     rect(this.x, this.y, this.size, this.size);
     this.move();
@@ -46,4 +45,5 @@ class ActionPotential {
       actionPotentialList[keys[i]].display();
     }
   }
+
 }

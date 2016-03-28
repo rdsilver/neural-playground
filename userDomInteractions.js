@@ -5,6 +5,7 @@ var controlPanel = {
   },
 
   changeState: function() {
+    // Don't do anything if the active panel is reclicked
     if(!$(this).hasClass('active')) {
       $('#control-panel div').removeClass('active');
       $(this).addClass('active');
@@ -86,10 +87,11 @@ var sizeSelection = {
     var newNeuronList = {};
     var oldSize = sketchOptions.cellSize;
 
-    // TODO WRITE action potential resize
     neuronList = Neuron.resizeNeuronList(neuronList, newSize, oldSize);
     sketchOptions.cellSize = newSize;
+    Neuron.resetNeurons();
     clearScreen();
+    actionPotentialList = {};
   }
 };
 

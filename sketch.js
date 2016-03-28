@@ -5,6 +5,7 @@ var selectedNeuron = false;
 
 var sketchOptions = {
   cellSize : 30,
+  actionPotentialDivisor: 5,
   bgColor : 50,
   gridColor : 75,
   controlPanelSize: 100,
@@ -53,6 +54,7 @@ function draw() {
       Neuron.displayAllConnections();
   }
 }
+
 
 // Was using default param but not enough browser support
 function clearScreen(keepGrid) {
