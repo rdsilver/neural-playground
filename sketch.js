@@ -44,11 +44,9 @@ function draw() {
       Neuron.displayAllNeurons();
       Neuron.allNeuronSpecificRoutines();
       break;
-    case 'neuronPlacement':
+    default:
       clearScreen();
       mouseHover();
-      /* falls through */
-    default:
       ActionPotential.displayAllActionPotentials();
       Neuron.displayAllNeurons();
       Neuron.displayAllConnections();
@@ -98,9 +96,15 @@ function mouseHover() {
   var x = mouseX - (mouseX % sketchOptions.cellSize);
   var y = mouseY - (mouseY % sketchOptions.cellSize);
 
-  if (!neuronList[`${x} ${y}`]) {
+  // Add grey hover state over cells that don't have a neuron
+  if (!neuronList[`${x} ${y}`] && state === 'neuronPlacement') {
     fill(sketchOptions.gridColor);
     rect(x, y, sketchOptions.cellSize, sketchOptions.cellSize);
+  }
+
+  if (selectedNeuron) {
+    var half = sketchOptions.cellSize/2;
+    line(selectedNeuron.x + half, selectedNeuron.y + half, x+half, y+half);
   }
 }
 
