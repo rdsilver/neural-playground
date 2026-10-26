@@ -1,5 +1,6 @@
-// Composition root: builds the studio layout, owns the frame loop and
-// implements every user-facing action (the panels and keyboard call these).
+// Composition root: builds the layout (a full-bleed board with floating
+// islands of chrome over it), owns the frame loop and implements every
+// user-facing action (the panels and keyboard call these).
 
 import {
   decodeShareCode,
@@ -9,14 +10,16 @@ import {
   networkBounds,
   networkFromJson,
   networkToJson,
+  TICKS_PER_SECOND,
   type FireEvent,
   type Network,
 } from '../engine';
 import { EXAMPLES, findExample, type Example } from '../examples';
 import { Synth } from './audio';
-import { Camera, DEFAULT_SCALE, fitView } from './camera';
+import { bestFit, Camera, DEFAULT_SCALE } from './camera';
 import type { Command } from './commands';
 import { h, isMac, isTyping, prefersReducedMotion } from './dom';
+import { icons } from './icons';
 import { BoardInput, type BoardHost, type Hit } from './input';
 import {
   addNeuron,
@@ -33,9 +36,12 @@ import {
   type NeuronPatch,
 } from './netops';
 import { appCommands } from './app-commands';
+import { insetOptions, type Chrome } from './layout';
+import { ExampleCard } from './panels/card';
 import { Gallery } from './panels/gallery';
 import { HelpDialog } from './panels/help';
 import { HoverCard } from './panels/hovercard';
+import { Hud } from './panels/hud';
 import { boardMenuEntries } from './panels/boardmenu';
 import { Menu } from './panels/menu';
 import { Inspector } from './panels/inspector';
@@ -46,7 +52,8 @@ import { installTooltips } from './panels/tooltip';
 import { ToolRail } from './panels/toolrail';
 import { TopBar } from './panels/topbar';
 import { Transport } from './panels/transport';
-import { exampleUrl, parseHash, readAutosave, readSettings, shareUrl, slugify, writeAutosave, writeSettings, type DocInfo, type Settings } from './persistence';
+import { ViewControls } from './panels/viewcontrols';
+import { exampleUrl, parseHash, readAutosave, readSettings, setTried, shareUrl, slugify, writeAutosave, writeSettings, type DocInfo, type Settings } from './persistence';
 import { Renderer, type Scene } from './renderer';
 import { clampSpeed, MAX_PULSES, nudgeSpeed, Runner } from './runner';
 import { matches, parseKeys } from './shortcuts';
@@ -54,6 +61,8 @@ import { selectionSize, Store, type Tool } from './store';
 import { applyTheme, readPalette, type Palette } from './theme';
 
 const AUTOSAVE_DELAY = 400;
+/** The demo's ghost finger appears this long (real time) before it presses. */
+const TAP_LEAD_SECONDS = 0.35;
 
 export class App implements BoardHost {
   readonly store: Store;
@@ -66,6 +75,7 @@ export class App implements BoardHost {
   commands: Command[] = [];
 
   readonly root: HTMLElement;
+  readonly shell = h('div', { class: 'app' });
   readonly stage = h('main', { class: 'stage', 'aria-label': 'Board' });
   readonly canvas = h('canvas', {
     class: 'board',
@@ -79,15 +89,16 @@ export class App implements BoardHost {
   private topbar!: TopBar;
   private rail!: ToolRail;
   inspector!: Inspector;
+  card!: ExampleCard;
+  private hud!: Hud;
   private transport!: Transport;
+  private viewControls!: ViewControls;
   private gallery!: Gallery;
   private help!: HelpDialog;
   private cmdPalette!: CommandPalette;
   private share!: ShareDialog;
   private hoverCard!: HoverCard;
   private boardMenu = new Menu('Board actions');
-  private caption = h('div', { class: 'caption off', 'aria-live': 'polite' });
-  private captionText = h('span', { class: 'caption-text' });
   private stageHint = h('div', { class: 'stage-hint', hidden: true });
   private dropOverlay = h('div', { class: 'drop-overlay', hidden: true }, h('div', { text: 'Drop a .json network to open it' }));
   private fileInput = h('input', { type: 'file', accept: '.json,application/json', class: 'sr-only', tabindex: -1, 'aria-hidden': 'true' });
@@ -97,7 +108,6 @@ export class App implements BoardHost {
   private lastLive = 0;
   private autosaveTimer = 0;
   private clip: Clip | null = null;
-  private shownCaption: string | undefined;
   private overloadShown = false;
   private wasAnimating = false;
 
@@ -141,6 +151,8 @@ export class App implements BoardHost {
     app.build();
     if (initial.example) app.startExample(initial.example, false);
     else app.zoomToFit(false);
+    // A link's network is saved right away, so a reload comes back to it.
+    if (request && !error) app.scheduleAutosave();
     if (request?.type === 'net' && !error) app.toasts.show('Opened a shared network');
     if (error) app.toasts.show(error, { error: true });
     // Point newcomers at the gallery until they have opened it once.
@@ -156,21 +168,47 @@ export class App implements BoardHost {
     this.renderer.setPalette(this.palette);
     this.commands = appCommands(this);
 
-    this.caption.append(h('span', { class: 'caption-tag', text: 'Demo' }), this.captionText);
     this.hoverCard = new HoverCard(this);
-    this.stage.append(this.canvas, this.caption, this.stageHint, this.hoverCard.el);
+    this.stage.append(this.canvas, this.stageHint, this.hoverCard.el);
 
+    // The card first: the title island reads its state.
+    this.card = new ExampleCard(this);
     this.topbar = new TopBar(this);
     this.rail = new ToolRail(this);
     this.inspector = new Inspector(this);
+    this.hud = new Hud(this);
     this.transport = new Transport(this);
+    this.viewControls = new ViewControls(this);
     this.gallery = new Gallery(this);
     this.help = new HelpDialog(this);
     this.cmdPalette = new CommandPalette(this);
     this.share = new ShareDialog();
 
-    const shell = h('div', { class: 'app' }, this.topbar.el, this.rail.el, this.stage, this.inspector.el, this.transport.el);
-    this.root.replaceChildren(shell, this.toasts.el, this.dropOverlay, this.fileInput, this.boardMenu.el, this.gallery.el, this.help.el, this.cmdPalette.el, this.share.el);
+    // On phones the rail and the transport stack into one bottom dock; on
+    // wider screens the dock wrapper is display: contents and each floats.
+    const dock = h('div', { class: 'dock' }, this.rail.el, this.transport.el);
+    this.shell.append(
+      this.stage,
+      h('header', { class: 'topbar' }, this.topbar.left, this.topbar.right),
+      this.card.el,
+      this.inspector.el,
+      this.viewControls.el,
+      this.hud.el,
+      dock,
+    );
+    this.root.replaceChildren(
+      this.shell,
+      this.toasts.el,
+      this.dropOverlay,
+      this.fileInput,
+      this.boardMenu.el,
+      this.rail.sheet,
+      ...this.topbar.layers,
+      this.gallery.el,
+      this.help.el,
+      this.cmdPalette.el,
+      this.share.el,
+    );
     installTooltips(this.root);
     this.buildStageHint();
 
@@ -204,6 +242,7 @@ export class App implements BoardHost {
     new ResizeObserver(() => this.resize()).observe(this.stage);
     matchMedia('(resolution: 1dppx), (resolution: 2dppx), (resolution: 3dppx)').addEventListener?.('change', () => this.resize());
     this.resize();
+    this.card.reset();
     this.updateStageHint();
   }
 
@@ -246,6 +285,7 @@ export class App implements BoardHost {
         action: { label: 'Reset', run: () => this.reset() },
       });
     }
+    this.drainTaps(now);
     const cameraMoved = this.camera.tick(now);
     const animating = this.renderer.animating(now);
     // One extra frame after effects finish, so their last trace is cleared.
@@ -254,13 +294,24 @@ export class App implements BoardHost {
       this.dirty = false;
     }
     this.wasAnimating = animating;
-    this.updateCaption();
+    this.hud.update(now);
     this.hoverCard.update(now);
     if (now - this.lastLive > 90) {
       this.lastLive = now;
       this.transport.update();
+      this.viewControls.update();
       this.inspector.live();
+      this.card.live();
+      this.hud.updateHint(now);
     }
+  }
+
+  /** Show a ghost-finger tap on each neuron the demo just pressed. */
+  private drainTaps(now: number): void {
+    const taps = this.runner.taps;
+    if (!taps.length) return;
+    for (const id of taps) this.renderer.demoTap(id, now);
+    taps.length = 0;
   }
 
   private onFires(events: readonly FireEvent[], now: number): void {
@@ -286,24 +337,19 @@ export class App implements BoardHost {
       tick: this.runner.renderTick,
       camera: this.camera,
       handleFor: this.input.handleFor,
+      upcomingTaps: this.runner.playing ? this.runner.upcomingTaps(this.tapLead) : [],
+      tapLead: this.tapLead,
     };
+  }
+
+  /** How many ticks ahead the ghost finger shows a coming demo press. */
+  private get tapLead(): number {
+    return Math.max(1, TAP_LEAD_SECONDS * TICKS_PER_SECOND * this.runner.speed);
   }
 
   /** Request a redraw on the next frame. */
   invalidate(): void {
     this.dirty = true;
-  }
-
-  private updateCaption(): void {
-    const r = this.runner;
-    const caption = r.demo && r.demoSeconds <= r.demoEndsAt + 6 ? r.caption : undefined;
-    if (caption === this.shownCaption) return;
-    this.shownCaption = caption;
-    if (caption) {
-      this.captionText.textContent = caption;
-      this.caption.classList.toggle('short', caption.length <= 18);
-    }
-    this.caption.classList.toggle('off', !caption);
   }
 
   // ------------------------------------------------------------ simulation
@@ -327,7 +373,9 @@ export class App implements BoardHost {
   step(toNextFire = false): void {
     this.setPlaying(false);
     const events = toNextFire ? this.runner.stepToNextFire() : this.runner.step();
-    this.onFires(events, performance.now());
+    const now = performance.now();
+    this.onFires(events, now);
+    this.drainTaps(now);
     this.transport.update();
     this.inspector.live();
     this.invalidate();
@@ -348,6 +396,19 @@ export class App implements BoardHost {
 
   nudgeSpeed(direction: 1 | -1): void {
     this.setSpeed(nudgeSpeed(this.runner.speed, direction));
+  }
+
+  /** Reset and run (examples without a demo). */
+  restart(): void {
+    this.reset();
+    this.setPlaying(true);
+  }
+
+  /** Stop the demo (captions and scripted presses); the simulation keeps running. */
+  stopDemo(): void {
+    this.runner.stopDemo();
+    this.transport.update();
+    this.invalidate();
   }
 
   /** Restart the current example's demo from a clean state and play it. */
@@ -527,6 +588,18 @@ export class App implements BoardHost {
   /** Right-click menu for whatever is under the pointer (or the selection). */
   contextMenu(clientX: number, clientY: number, hit: Hit, keyboard = false): void {
     this.boardMenu.show(clientX, clientY, boardMenuEntries(this, hit), { opener: this.canvas, keyboard });
+    // Right-clicking a neuron, wire or note also inspects it.
+    if (hit.type !== 'empty' && hit.type !== 'cell') this.inspector.setOpen(true);
+  }
+
+  /** Long-press on touch: select the item and open the inspector on it. */
+  inspect(hit: Hit): void {
+    const s = this.store;
+    if (hit.type === 'neuron' || hit.type === 'handle') s.selectOnly('neuron', hit.id);
+    else if (hit.type === 'text') s.selectOnly('text', hit.id);
+    else if (hit.type === 'connection') s.selectConnection({ from: hit.from, to: hit.to });
+    else return;
+    this.inspector.setOpen(true);
   }
 
   /** Context-menu key / Shift+F10: open the menu for the selection (or the view centre). */
@@ -547,9 +620,9 @@ export class App implements BoardHost {
 
   /** Load an example as an undoable document swap. */
   loadExample(example: Example): void {
+    // Opening an example shows its notes again, even if they were folded.
+    this.restoreNotes(example.id);
     this.store.replace(example.network, { title: example.title, exampleId: example.id }, `Open “${example.title}”`);
-    this.settings.dismissedNotes = this.settings.dismissedNotes.filter((id) => id !== example.id);
-    this.saveSettings();
     this.startExample(example, true);
   }
 
@@ -561,7 +634,6 @@ export class App implements BoardHost {
     if (example.demo?.length) this.runner.startDemo(example.demo);
     else this.runner.stopDemo();
     this.setPlaying(example.autoplay !== false);
-    this.inspector.showExample();
     this.zoomToFit(animate);
   }
 
@@ -571,8 +643,33 @@ export class App implements BoardHost {
   }
 
   restoreNotes(id: string): void {
+    if (!this.settings.dismissedNotes.includes(id)) return;
     this.settings.dismissedNotes = this.settings.dismissedNotes.filter((x) => x !== id);
     this.saveSettings();
+  }
+
+  /** Tick or untick a "Try this" item (remembered per example). */
+  setTried(example: Example, index: number, done: boolean): void {
+    this.settings.tried = setTried(this.settings.tried, example.id, index, done);
+    this.saveSettings();
+    this.card.render();
+    const total = example.tryThis?.length ?? 0;
+    if (done && total && this.settings.tried[example.id]?.length === total) {
+      const next = EXAMPLES[(EXAMPLES.indexOf(example) + 1) % EXAMPLES.length]!;
+      this.toasts.show('You tried everything here. Nice!', { duration: 6000, action: { label: `Next: ${next.title}`, run: () => this.loadExample(next) } });
+    }
+  }
+
+  /** The notes card opened or folded. */
+  onCardChange(): void {
+    this.shell.classList.toggle('card-open', this.card.isOpen);
+    this.topbar?.refreshDoc();
+  }
+
+  /** The inspector opened or closed. */
+  onInspectorChange(open: boolean): void {
+    this.shell.classList.toggle('inspecting', open);
+    if (open) this.revealSelection();
   }
 
   openGallery(): void {
@@ -618,14 +715,79 @@ export class App implements BoardHost {
       view = { x: -width / 2 / DEFAULT_SCALE, y: -height / 2 / DEFAULT_SCALE, scale: DEFAULT_SCALE };
     } else {
       const b = networkBounds(net);
-      const pad = width < 500 ? 20 : 56;
-      // Leave room at the top for demo captions, and below for a peeking sheet.
-      const top = this.currentExample?.demo?.length ? (width < 500 ? 64 : 72) : 0;
-      const bottom = this.inspector.coveredHeight;
-      view = fitView({ minX: b.minX - 0.5, minY: b.minY - 0.5, maxX: b.maxX + 0.5, maxY: b.maxY + 0.5 }, width, height - top - bottom, pad, 64);
-      view.y -= top / view.scale;
+      const bounds = { minX: b.minX - 0.5, minY: b.minY - 0.5, maxX: b.maxX + 0.5, maxY: b.maxY + 0.5 };
+      view = bestFit(bounds, width, height, insetOptions(this.measureChrome()), 64);
     }
     this.camera.animateTo(view, animate && !prefersReducedMotion() ? 320 : 0);
+    this.invalidate();
+  }
+
+  /**
+   * Where the floating chrome sits over the board, measured from the DOM so
+   * the fit follows the real layout at every size: under the top islands,
+   * right of the rail, above the dock and the demo's captions, and clear of
+   * the notes card and an open inspector.
+   */
+  private measureChrome(): Chrome {
+    const stage = this.stage.getBoundingClientRect();
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left - stage.left, top: r.top - stage.top, right: r.right - stage.left, bottom: r.bottom - stage.top, width: r.width, height: r.height };
+    };
+    const { width, height } = stage;
+    const top = Math.max(rect(this.topbar.left).bottom, rect(this.topbar.right).bottom);
+    // The rail floats on the left on wide screens; on phones it is part of the bottom dock.
+    const rail = rect(this.rail.el);
+    const railOnLeft = rail.height > rail.width;
+    let bottom = rect(this.transport.el).top;
+    if (railOnLeft) bottom = Math.min(bottom, rect(this.viewControls.el).top);
+    else bottom = Math.min(bottom, rail.top);
+    // Room for the demo's captions (two lines) or the one-line hint.
+    const phone = width <= 760;
+    bottom -= this.runner.demoLive ? (phone ? 84 : 92) : 30;
+    const chrome: Chrome = { width, height, top, left: railOnLeft ? rail.right : 0, right: width, bottom };
+    if (this.inspector.isOpen && !phone) chrome.right = rect(this.inspector.el).left;
+    const card = this.card.rect();
+    if (card) chrome.card = { left: card.left - stage.left, top: card.top - stage.top, right: card.right - stage.left, bottom: card.bottom - stage.top };
+    return chrome;
+  }
+
+  /**
+   * After the inspector opens, glide the board so the selected neuron (or
+   * wire, or note) is not hidden under it.
+   */
+  private revealSelection(): void {
+    const s = this.store;
+    const sel = s.selection;
+    let at: { x: number; y: number } | null = null;
+    const n = sel.neurons.size ? s.index.byId.get([...sel.neurons][0]!) : undefined;
+    if (n) at = { x: n.x + 0.5, y: n.y + 0.5 };
+    else if (sel.connection) {
+      const a = s.index.byId.get(sel.connection.from);
+      const b = s.index.byId.get(sel.connection.to);
+      if (a && b) at = { x: (a.x + b.x) / 2 + 0.5, y: (a.y + b.y) / 2 + 0.5 };
+    } else if (sel.texts.size) {
+      const t = s.index.texts.get([...sel.texts][0]!);
+      if (t) at = { x: t.x, y: t.y };
+    }
+    if (!at) return;
+    const stage = this.stage.getBoundingClientRect();
+    const panel = this.inspector.el.getBoundingClientRect();
+    const p = this.camera.toScreen(at.x, at.y);
+    const px = p.x + stage.left;
+    const py = p.y + stage.top;
+    const margin = this.camera.scale * 0.8 + 28;
+    let dx = 0;
+    let dy = 0;
+    if (panel.width >= stage.width - 40) {
+      // Phone sheet along the bottom: keep the item above it.
+      if (py > panel.top - margin) dy = py - (panel.top - margin);
+    } else if (px > panel.left - margin && py > panel.top - margin && py < panel.bottom + margin) {
+      dx = px - (panel.left - margin);
+    }
+    if (!dx && !dy) return;
+    const v = this.camera.view;
+    this.camera.animateTo({ x: v.x + dx / v.scale, y: v.y + dy / v.scale, scale: v.scale }, prefersReducedMotion() ? 0 : 260);
     this.invalidate();
   }
 
@@ -645,7 +807,8 @@ export class App implements BoardHost {
     this.saveSettings();
     this.rail.refresh();
     this.topbar.refresh();
-    this.inspector.render();
+    if (this.inspector.isOpen) this.inspector.render();
+    this.card.render();
     this.invalidate();
   }
 
@@ -824,7 +987,8 @@ export class App implements BoardHost {
     // Toolbar buttons should not keep focus after a mouse click, so Space
     // keeps meaning play/pause instead of re-pressing the last button.
     document.addEventListener('mousedown', (e) => {
-      if (e.target instanceof Element && e.target.closest('.topbar button, .rail button, .transport button')) e.preventDefault();
+      const chrome = '.topbar button, .rail button, .transport button, .view-controls button, .caption button, .card-wrap button, .card-wrap label, .card-wrap summary';
+      if (e.target instanceof Element && e.target.closest(chrome)) e.preventDefault();
     });
   }
 
@@ -886,12 +1050,13 @@ export class App implements BoardHost {
     const card = h(
       'div',
       { class: 'stage-hint-card' },
+      h('span', { class: 'stage-hint-mark', html: icons.logo, 'aria-hidden': 'true' }),
       h('h2', { text: 'An empty board' }),
-      h('p', { text: 'Pick a neuron kind in the rail (keys 1–6) and click the grid to place it. Drag from one neuron to another to connect them.' }),
+      h('p', { text: 'Pick a neuron kind from the tools (keys 1–6) and click the grid to place it. Drag from one neuron to another to connect them.' }),
       h(
         'div',
         { class: 'row' },
-        h('button', { class: 'btn outline', text: 'Browse examples', onclick: () => this.openGallery() }),
+        h('button', { class: 'btn primary', text: 'Browse examples', onclick: () => this.openGallery() }),
         h('button', { class: 'btn outline', text: 'Undo clear', onclick: () => this.undo() }),
       ),
     );

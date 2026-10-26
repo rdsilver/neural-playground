@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NetworkBuilder } from '../engine';
-import { DEFAULT_SETTINGS, exampleUrl, parseHash, readAutosave, readSettings, shareUrl, slugify, writeAutosave, writeSettings } from './persistence';
+import { DEFAULT_SETTINGS, exampleUrl, parseHash, readAutosave, readSettings, setTried, shareUrl, slugify, writeAutosave, writeSettings } from './persistence';
 
 class MemoryStorage implements Storage {
   private data = new Map<string, string>();
@@ -60,6 +60,22 @@ describe('storage', () => {
     expect(readSettings(storage)).toMatchObject({ muted: true, theme: 'light' });
     storage.setItem('neural-playground:settings:v2', '{"volume": 7, "theme": "neon"}');
     expect(readSettings(storage)).toEqual(DEFAULT_SETTINGS);
+  });
+
+  it('keeps the Try this checklist per example and drops junk', () => {
+    const storage = new MemoryStorage();
+    let tried = setTried({}, 'adding-machine', 2, true);
+    tried = setTried(tried, 'adding-machine', 0, true);
+    tried = setTried(tried, 'pulse-dial', 1, true);
+    expect(tried).toEqual({ 'adding-machine': [0, 2], 'pulse-dial': [1] });
+    tried = setTried(tried, 'pulse-dial', 1, false);
+    expect(tried).toEqual({ 'adding-machine': [0, 2] });
+    writeSettings({ ...DEFAULT_SETTINGS, tried }, storage);
+    expect(readSettings(storage).tried).toEqual({ 'adding-machine': [0, 2] });
+    storage.setItem('neural-playground:settings:v2', JSON.stringify({ tried: { a: [1, 1, -1, 'x', 2.5, 3], b: 'no', c: [] } }));
+    expect(readSettings(storage).tried).toEqual({ a: [1, 3] });
+    storage.setItem('neural-playground:settings:v2', JSON.stringify({ tried: [1, 2] }));
+    expect(readSettings(storage).tried).toEqual({});
   });
 
   it('survives storage that throws', () => {

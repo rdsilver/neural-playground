@@ -1,7 +1,9 @@
-// Right-hand inspector: properties of whatever is selected, notes for the
-// current example, and network stats. Rebuilt on every change (it is
-// small), keeping focus and scroll position so typing is never disturbed.
-// On phones it becomes a bottom sheet.
+// The inspector: a floating panel on the right with the properties of
+// whatever is selected. It slides in when something is selected and away
+// when the selection is cleared; a neuron that was only poked (clicked while
+// the simulation runs) is selected quietly, without opening it. Rebuilt on
+// every change (it is small), keeping focus and scroll position so typing is
+// never disturbed. On phones it is a bottom sheet above the dock.
 
 import { KIND_INFO, NEURON_KINDS, noteName, TICKS_PER_SECOND, travelTicks, type NeuronKind, type NeuronSpec, type TextSpec } from '../../engine';
 import type { App } from '../app';
@@ -14,67 +16,57 @@ import { selectionSize } from '../store';
 import { iconButton, prop, section, segmented, stacked, stepper, textInput, toggle } from './controls';
 import { tipped } from './tooltip';
 
-type SheetState = 'closed' | 'peek' | 'open';
-
 export class Inspector {
   readonly el: HTMLElement;
   private scroll = h('div', { class: 'insp-scroll' });
-  private sheetTitle = h('b');
-  private sheetSub = h('span');
+  private headIcon = h('span', { class: 'insp-head-icon', 'aria-hidden': 'true' });
+  private headTitle = h('h2', { class: 'insp-head-title' });
+  private headSub = h('span', { class: 'insp-head-sub' });
   private liveUpdaters: (() => void)[] = [];
-  private sheet: SheetState = 'closed';
-  private sheetReason: 'selection' | 'user' = 'user';
-  private readonly phone = matchMedia('(max-width: 760px)');
-  /** Examples whose long notes the user unfolded. */
-  private expandedNotes = new Set<string>();
+  private open = false;
   /** What was selected at the last render (scroll resets when it changes). */
   private shownSelection = '';
 
   constructor(private readonly app: App) {
-    const sheetToggle = h(
-      'button',
-      { class: 'sheet-title', type: 'button', 'aria-label': 'Expand or collapse the inspector', onclick: () => this.setSheet(this.sheet === 'open' ? 'peek' : 'open', 'user') },
-      this.sheetTitle,
-      this.sheetSub,
+    const close = tipped(h('button', { class: 'btn icon-btn', type: 'button', html: icons.close, onclick: () => app.store.clearSelection() }), 'Close', 'escape');
+    this.el = h(
+      'aside',
+      { class: 'inspector island', 'aria-label': 'Inspector', 'aria-hidden': 'true' },
+      h('header', { class: 'insp-head' }, this.headIcon, h('div', { class: 'insp-head-text' }, this.headTitle, this.headSub), close),
+      this.scroll,
     );
-    const close = h('button', { class: 'btn', type: 'button', html: icons.close, 'aria-label': 'Close inspector', onclick: () => this.setSheet('closed', 'user') });
-    this.el = h('aside', { class: 'inspector', 'aria-label': 'Inspector', 'data-sheet': 'closed' }, h('div', { class: 'sheet-bar' }, sheetToggle, close), this.scroll);
+    this.el.inert = true;
 
     app.store.on('selection', () => {
-      this.render();
       const size = selectionSize(app.store.selection);
-      if (size && !app.running && this.sheet === 'closed') this.setSheet('peek', 'selection');
-      if (!size && this.sheetReason === 'selection') this.setSheet('closed', 'user');
+      if (!size) this.setOpen(false);
+      else if (!app.store.selectionQuiet) this.setOpen(true);
+      if (this.open) this.render();
     });
-    app.store.on('network', () => this.render());
-    this.render();
+    app.store.on('network', () => {
+      if (this.open) this.render();
+    });
   }
 
-  // --------------------------------------------------------------- sheet
-
-  private setSheet(state: SheetState, reason: 'selection' | 'user'): void {
-    this.sheet = state;
-    this.sheetReason = reason;
-    this.el.dataset.sheet = state;
+  get isOpen(): boolean {
+    return this.open;
   }
 
-  /** Pixels at the bottom of the board hidden by the peeking sheet (phones). */
-  get coveredHeight(): number {
-    return this.phone.matches && this.sheet === 'peek' ? this.el.offsetHeight : 0;
-  }
-
-  /** Bring the example notes into view (and un-dismiss them when asked to). */
-  showExample(expand = false): void {
-    const example = this.app.currentExample;
-    if (expand && example) this.app.restoreNotes(example.id);
-    this.render();
-    if (this.phone.matches) this.setSheet(expand ? 'open' : 'peek', 'user');
-    else if (expand) this.scroll.querySelector('.example-card')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  /** Show the panel for the current selection (if there is one). */
+  setOpen(open: boolean): void {
+    open &&= selectionSize(this.app.store.selection) > 0;
+    if (open === this.open) return;
+    this.open = open;
+    if (open) this.render();
+    this.el.classList.toggle('open', open);
+    this.el.inert = !open;
+    this.el.setAttribute('aria-hidden', String(!open));
+    this.app.onInspectorChange(open);
   }
 
   focusTextEditor(): void {
+    this.setOpen(true);
     this.render();
-    if (this.phone.matches) this.setSheet('open', 'user');
     const area = this.scroll.querySelector<HTMLTextAreaElement>('[data-field="text-body"]');
     area?.focus();
     area?.select();
@@ -103,13 +95,8 @@ export class Inspector {
       const text = store.index.texts.get([...sel.texts][0]!);
       if (text) parts.push(this.textSection(text));
     } else if (selectionSize(sel) > 1) parts.push(this.multiSection());
-
-    const notes = this.exampleSection();
-    if (notes) parts.push(notes);
-    parts.push(this.networkSection());
-    if (!selectionSize(sel)) parts.push(this.tipsSection());
     this.scroll.replaceChildren(...parts);
-    this.updateSheetTitle();
+    this.updateHead();
 
     this.scroll.scrollTop = scrollTop;
     if (field) {
@@ -134,30 +121,34 @@ export class Inspector {
     for (const fn of this.liveUpdaters) fn();
   }
 
-  private updateSheetTitle(): void {
+  /** The panel's header: what is selected, with a short description. */
+  private updateHead(): void {
     const { store } = this.app;
     const sel = store.selection;
     const n = store.selectedNeuron;
-    let title = 'Network';
-    let sub = `${store.network.neurons.length} neurons · ${store.network.connections.length} connections`;
+    let icon: Node = h('span', { html: icons.select });
+    let title = '';
+    let sub = '';
     if (n) {
+      icon = this.kindIcon(n.kind, 28);
       title = `${KIND_INFO[n.kind].name}${n.label ? ` “${n.label}”` : ''}`;
-      sub = n.kind === 'timer' ? `every ${n.interval}s` : n.kind === 'note' ? `${noteName(n.note ?? 60)} · threshold ${n.threshold}` : `threshold ${n.threshold}`;
+      sub = `${n.id} · cell ${n.x}, ${n.y}`;
     } else if (sel.connection) {
+      const twoWay = store.index.pairs.has(pairKey(sel.connection.to, sel.connection.from));
+      icon = h('span', { html: icons.connect });
       title = 'Connection';
-      sub = `${sel.connection.from} → ${sel.connection.to}`;
+      sub = `${sel.connection.from} → ${sel.connection.to} · ${twoWay ? 'two-way' : 'one-way'}`;
     } else if (selectionSize(sel) > 1) {
       title = `${selectionSize(sel)} items selected`;
-      sub = 'Tap to edit them together';
+      sub = 'Shift-click or Shift-drag to add more';
     } else if (sel.texts.size) {
+      icon = h('span', { html: icons.text });
       title = 'Text note';
-      sub = 'Tap to edit';
-    } else if (this.app.currentExample) {
-      title = this.app.currentExample.title;
-      sub = 'About this example';
+      sub = 'Shown on the board';
     }
-    this.sheetTitle.textContent = title;
-    this.sheetSub.textContent = sub;
+    this.headIcon.replaceChildren(icon);
+    this.headTitle.textContent = title;
+    this.headSub.textContent = sub;
   }
 
   // ------------------------------------------------------------ sections
@@ -190,16 +181,9 @@ export class Inspector {
 
   private neuronSection(n: NeuronSpec): HTMLElement {
     const app = this.app;
-    const info = KIND_INFO[n.kind];
     const edit = (patch: Parameters<typeof updateNeuron>[2], label: string, key?: string) => app.updateNeuron(n.id, patch, label, key && `${key}:${n.id}`);
 
-    const hero = h(
-      'div',
-      { class: 'insp-hero' },
-      this.kindIcon(n.kind, 34),
-      h('div', { class: 'insp-hero-text' }, h('h3', { text: n.label ? `${info.name} “${n.label}”` : info.name }), h('div', { class: 'sub', text: `${n.id} · cell ${n.x}, ${n.y}` })),
-    );
-    const body: HTMLElement[] = [hero, stacked('Kind', this.kindGrid('kind', n.kind, (k) => k !== n.kind && edit({ kind: k }, `Change to ${KIND_INFO[k].name.toLowerCase()}`)))];
+    const body: HTMLElement[] = [stacked('Kind', this.kindGrid('kind', n.kind, (k) => k !== n.kind && edit({ kind: k }, `Change to ${KIND_INFO[k].name.toLowerCase()}`)))];
     body.push(
       prop('Label', textInput('label', 'Label', n.label ?? '', n.kind === 'character' ? 'Shown under the digit' : 'Text on the neuron', 12, (v) => edit({ label: v }, 'Edit label', 'label')), undefined, 'f-label'),
     );
@@ -277,7 +261,7 @@ export class Inspector {
       ),
     );
     body.push(this.connectionsList(n));
-    return section('Neuron', [], ...body);
+    return section('', [], ...body);
   }
 
   private noteEditor(n: NeuronSpec, edit: (patch: { note: number }, label: string, key?: string) => void): HTMLElement {
@@ -419,9 +403,8 @@ export class Inspector {
       inFlight.textContent = String(count);
     });
     return section(
-      'Connection',
+      '',
       [],
-      h('div', { class: 'insp-hero' }, h('span', { class: 'brand-mark', style: 'background:var(--panel-3);color:var(--accent)', html: icons.connect }), h('div', { class: 'insp-hero-text' }, h('h3', { text: `${fromId} → ${toId}` }), h('div', { class: 'sub', text: twoWay ? 'two-way pair' : 'one-way' }))),
       prop('From', end(from)),
       prop('To', end(to)),
       prop('Length', h('span', { class: 'mono', text: `${distance.toFixed(2)} cells` })),
@@ -447,7 +430,7 @@ export class Inspector {
     const area = h('textarea', { class: 'input', id: 'f-text-body', 'data-field': 'text-body', rows: 3, 'aria-label': 'Text', value: t.text, maxlength: 500 });
     area.addEventListener('input', () => edit({ text: area.value }, 'Edit text', 'text'));
     return section(
-      'Text note',
+      '',
       [],
       area,
       h('div', { style: 'height:10px' }),
@@ -502,7 +485,7 @@ export class Inspector {
     for (const [kind, count] of counts) summary.append(h('span', {}, h('i', { style: `background:${app.palette.kinds[kind]}` }), `${count} ${KIND_INFO[kind].name}${count === 1 ? '' : 's'}`));
     if (store.selection.texts.size) summary.append(h('span', { text: `${store.selection.texts.size} text${store.selection.texts.size === 1 ? '' : 's'}` }));
 
-    const body: HTMLElement[] = [h('div', { class: 'insp-hero' }, h('div', { class: 'insp-hero-text' }, h('h3', { text: `${selectionSize(store.selection)} items selected` }), h('div', { class: 'sub plain', text: 'Shift-click or Shift-drag to add more' }))), summary];
+    const body: HTMLElement[] = [summary];
     if (neurons.length) {
       body.push(stacked('Kind', this.kindGrid('multi-kind', counts.size === 1 ? [...counts.keys()][0]! : null, (k) => editAll({ kind: k }, `Change ${neurons.length} to ${KIND_INFO[k].name.toLowerCase()}`))));
       if (thresholds.size) {
@@ -526,127 +509,6 @@ export class Inspector {
         iconButton('delete', 'trash', 'Delete', () => app.deleteSelection(), 'btn small danger', 'delete'),
       ),
     );
-    return section('Selection', [], ...body);
-  }
-
-  private exampleSection(): HTMLElement | null {
-    const app = this.app;
-    const ex = app.currentExample;
-    if (!ex || app.settings.dismissedNotes.includes(ex.id)) return null;
-    const dismiss = tipped(
-      h('button', {
-        class: 'btn small',
-        type: 'button',
-        'data-field': 'dismiss-notes',
-        html: icons.close,
-        onclick: () => {
-          app.dismissNotes(ex.id);
-          this.render();
-        },
-      }),
-      'Hide these notes',
-    );
-    const card = h('div', { class: 'example-card' });
-    card.append(
-      h('div', { class: 'ex-meta' }, h('span', { class: 'badge', text: ex.category }), ex.demo?.length ? h('span', { class: 'badge accent', text: 'Demo' }) : null),
-      h('h3', { text: ex.title }),
-      h(
-        'div',
-        { class: 'row wrap ex-actions' },
-        ex.demo?.length ? iconButton('replay', 'replay', 'Replay demo', () => app.replayDemo(), 'btn small primary') : null,
-        iconButton('browse', 'examples', 'Examples', () => app.openGallery(), 'btn small outline', 'e'),
-        tipped(
-          h('button', { class: 'btn small', type: 'button', 'data-field': 'example-link', html: icons.share, 'aria-label': 'Copy a link to this example', onclick: () => void app.copyExampleLink(ex.id) }),
-          'Copy a link to this example',
-        ),
-      ),
-    );
-    // Long write-ups start folded to their first paragraph so "Try this" stays in view.
-    const paragraphs = ex.description.split(/\n\s*\n/).map((p) => p.trim());
-    const long = paragraphs.length > 1 && ex.description.length > 420;
-    const open = !long || this.expandedNotes.has(ex.id);
-    for (const para of open ? paragraphs : paragraphs.slice(0, 1)) card.append(h('p', { text: para }));
-    if (long) {
-      card.append(
-        h('button', {
-          class: 'link-btn',
-          type: 'button',
-          'data-field': 'more-notes',
-          'aria-expanded': String(open),
-          text: open ? 'Show less' : `Read more (${paragraphs.length - 1} more paragraph${paragraphs.length > 2 ? 's' : ''})`,
-          onclick: () => {
-            if (open) this.expandedNotes.delete(ex.id);
-            else this.expandedNotes.add(ex.id);
-            this.render();
-          },
-        }),
-      );
-    }
-    if (ex.tryThis?.length) {
-      card.append(h('div', { class: 'try' }, h('h4', { text: 'Try this' }), h('ul', {}, ...ex.tryThis.map((t) => h('li', { text: t })))));
-    }
-    return section('Example', [dismiss], card);
-  }
-
-  private networkSection(): HTMLElement {
-    const app = this.app;
-    const net = app.store.network;
-    const counts = new Map<NeuronKind, number>();
-    for (const n of net.neurons) counts.set(n.kind, (counts.get(n.kind) ?? 0) + 1);
-    const pulses = h('b', { text: '0' });
-    const fires = h('b', { text: '0' });
-    this.liveUpdaters.push(() => {
-      const sim = app.runner.sim;
-      pulses.textContent = sim.pulses().length.toLocaleString('en-US');
-      let total = 0;
-      for (const n of net.neurons) total += sim.state(n.id)?.fireCount ?? 0;
-      fires.textContent = total.toLocaleString('en-US');
-    });
-    const bars = h('div', { class: 'kind-bars', 'aria-hidden': 'true' });
-    const legend = h('div', { class: 'legend-inline' });
-    for (const kind of NEURON_KINDS) {
-      const c = counts.get(kind);
-      if (!c) continue;
-      bars.append(h('span', { style: `width:${(100 * c) / net.neurons.length}%;background:${app.palette.kinds[kind]}` }));
-      legend.append(h('span', {}, h('i', { style: `background:${app.palette.kinds[kind]}` }), `${c} ${KIND_INFO[kind].name}`));
-    }
-    const ex = app.currentExample;
-    const restore =
-      ex && app.settings.dismissedNotes.includes(ex.id)
-        ? h('button', { class: 'btn small', type: 'button', 'data-field': 'show-notes', html: icons.info, 'aria-label': 'Show example notes', onclick: () => this.showExample(true) })
-        : null;
-    if (restore) tipped(restore, 'Show example notes');
-    return section(
-      'Network',
-      restore ? [restore] : [],
-      h(
-        'div',
-        { class: 'stats' },
-        h('div', { class: 'stat' }, h('b', { text: net.neurons.length.toLocaleString('en-US') }), h('span', { text: 'neurons' })),
-        h('div', { class: 'stat' }, h('b', { text: net.connections.length.toLocaleString('en-US') }), h('span', { text: 'connections' })),
-        h('div', { class: 'stat' }, pulses, h('span', { text: 'pulses in flight' })),
-        h('div', { class: 'stat' }, fires, h('span', { text: 'fires since reset' })),
-      ),
-      net.neurons.length ? bars : null,
-      net.neurons.length ? legend : null,
-    );
-  }
-
-  private tipsSection(): HTMLElement {
-    const tip = (keys: string[], text: string) => h('li', {}, h('span', {}, ...keys.map((k) => h('kbd', { text: k }))), h('span', { text }));
-    const mod = this.app.isMac ? '⌘' : 'Ctrl';
-    return section(
-      'Quick tips',
-      [],
-      h(
-        'ul',
-        { class: 'tips' },
-        tip(['Click'], 'a neuron while running to poke it (+1 charge)'),
-        tip(['1', '–', '6'], 'pick a neuron kind, then click the grid'),
-        tip(['Drag'], 'from a neuron’s handle to connect it'),
-        tip(['Space'], 'play or pause · drag empty space to pan'),
-        tip([mod, 'K'], 'search every command'),
-      ),
-    );
+    return section('', [], ...body);
   }
 }

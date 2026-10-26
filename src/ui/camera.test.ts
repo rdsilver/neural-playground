@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Camera, fitView, interpolateView, MAX_SCALE, MIN_SCALE } from './camera';
+import { bestFit, Camera, fitView, fitViewIn, interpolateView, MAX_SCALE, MIN_SCALE } from './camera';
 
 describe('Camera', () => {
   it('round-trips between world and screen', () => {
@@ -58,6 +58,34 @@ describe('fitView', () => {
 
   it('does not zoom in past maxScale for tiny networks', () => {
     expect(fitView({ minX: 0, minY: 0, maxX: 1, maxY: 1 }, 800, 600, 40, 48).scale).toBe(48);
+  });
+});
+
+describe('fitViewIn', () => {
+  const box = { minX: 0, minY: 0, maxX: 10, maxY: 5 };
+
+  it('centres the bounds in the free area left by the insets', () => {
+    const v = fitViewIn(box, 1000, 600, { top: 100, right: 0, bottom: 100, left: 400 }, 1000);
+    // Free area: 600 x 400 at (400, 100); 10 x 5 cells fit at 60 px.
+    expect(v.scale).toBe(60);
+    const centre = { x: v.x + (400 + 300) / v.scale, y: v.y + (100 + 200) / v.scale };
+    expect(centre.x).toBeCloseTo(5);
+    expect(centre.y).toBeCloseTo(2.5);
+  });
+
+  it('picks the framing that shows the network biggest', () => {
+    // A card on the left: beside it leaves a narrow column, below it a wide strip.
+    const wide = { minX: 0, minY: 0, maxX: 40, maxY: 10 };
+    const beside = { top: 60, right: 20, bottom: 80, left: 420 };
+    const below = { top: 500, right: 20, bottom: 80, left: 20 };
+    const v = bestFit(wide, 1200, 900, [beside, below]);
+    expect(v.scale).toBeCloseTo(fitViewIn(wide, 1200, 900, below).scale);
+    const tall = { minX: 0, minY: 0, maxX: 10, maxY: 30 };
+    expect(bestFit(tall, 1200, 900, [beside, below]).scale).toBeCloseTo(fitViewIn(tall, 1200, 900, beside).scale);
+  });
+
+  it('matches fitView with equal padding', () => {
+    expect(fitViewIn(box, 600, 400, { top: 50, right: 50, bottom: 50, left: 50 }, 1000)).toEqual(fitView(box, 600, 400, 50, 1000));
   });
 });
 

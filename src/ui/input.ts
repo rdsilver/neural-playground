@@ -22,8 +22,10 @@ export interface BoardHost {
   moveSelection(dx: number, dy: number): boolean;
   addText(x: number, y: number): void;
   editText(id: string): void;
-  /** Right-click (or long gesture equivalent): show the board's context menu. */
+  /** Right-click: show the board's context menu. */
   contextMenu(clientX: number, clientY: number, hit: Hit, keyboard?: boolean): void;
+  /** Select what was long-pressed and open the inspector on it. */
+  inspect(hit: Hit): void;
   /** Something visual changed: draw a frame. */
   invalidate(): void;
 }
@@ -44,6 +46,8 @@ type Gesture =
 
 const DRAG_PX = 4;
 const TOUCH_DRAG_PX = 9;
+/** Hold a finger still this long to inspect (or, on empty board, get the menu). */
+const LONG_PRESS_MS = 500;
 
 export class BoardInput {
   hover: Hover | null = null;
@@ -80,12 +84,10 @@ export class BoardInput {
     });
     canvas.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      // A touch long-press (mouse right-clicks are handled on pointerup).
+      // Some browsers report a touch long-press as a contextmenu before our
+      // own timer fires (mouse right-clicks are handled on pointerup).
       const g = this.gesture;
-      if (g?.type === 'press' && g.touch) {
-        this.gesture = null;
-        this.host.contextMenu(e.clientX, e.clientY, g.hit);
-      }
+      if (g?.type === 'press' && g.touch) this.longPress(g, e.clientX, e.clientY);
     });
   }
 
@@ -232,7 +234,21 @@ export class BoardInput {
       return;
     }
     if (e.button !== 0) return;
-    this.gesture = { type: 'press', hit: this.hitTest(p), start: p, shift: e.shiftKey, alt: e.altKey, touch: e.pointerType !== 'mouse' };
+    const press: Press = { type: 'press', hit: this.hitTest(p), start: p, shift: e.shiftKey, alt: e.altKey, touch: e.pointerType !== 'mouse' };
+    this.gesture = press;
+    if (press.touch) {
+      const { clientX, clientY } = e;
+      // Still the same untouched press when the timer fires: a long-press.
+      window.setTimeout(() => this.gesture === press && this.longPress(press, clientX, clientY), LONG_PRESS_MS);
+    }
+  }
+
+  /** A finger held still: inspect what is under it, or offer the menu on empty board. */
+  private longPress(g: Press, clientX: number, clientY: number): void {
+    this.gesture = null;
+    navigator.vibrate?.(8);
+    if (g.hit.type === 'empty' || g.hit.type === 'cell') this.host.contextMenu(clientX, clientY, g.hit);
+    else this.host.inspect(g.hit);
   }
 
   private onMove(e: PointerEvent): void {
@@ -422,7 +438,8 @@ export class BoardInput {
       case 'neuron':
       case 'handle':
         if (g.shift && tool === 'select') store.toggleSelected('neuron', hit.id);
-        else store.selectOnly('neuron', hit.id);
+        // A click while running is a poke: select quietly, without opening the inspector.
+        else store.selectOnly('neuron', hit.id, host.running);
         if (host.running) host.poke(hit.id);
         break;
       case 'text':

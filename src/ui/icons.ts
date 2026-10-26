@@ -42,7 +42,11 @@ export const icons = {
   swap: svg('<path d="M4 7h11.5M12.5 4l3 3-3 3M16 13H4.5M7.5 10l-3 3 3 3"/>'),
   copy: svg('<rect x="7" y="7" width="9" height="9" rx="1.6"/><path d="M13 7V5.4c0-.9-.7-1.6-1.6-1.6H5.4c-.9 0-1.6.7-1.6 1.6v6c0 .9.7 1.6 1.6 1.6H7"/>'),
   more: svg('<circle cx="4.8" cy="10" r=".9" fill="currentColor"/><circle cx="10" cy="10" r=".9" fill="currentColor"/><circle cx="15.2" cy="10" r=".9" fill="currentColor"/>'),
-  info: svg('<circle cx="10" cy="10" r="7"/><path d="M10 9v4.5"/><circle cx="10" cy="6.6" r=".4" fill="currentColor"/>'),
+  chevronDown: svg('<path d="m5.5 8 4.5 4.5L14.5 8"/>'),
+  chevronUp: svg('<path d="m5.5 12 4.5-4.5 4.5 4.5"/>'),
+  arrowRight: svg('<path d="M4 10h11.5M11 5.5l4.5 4.5-4.5 4.5"/>'),
+  check: svg('<path d="m4.5 10.5 3.5 3.5 7.5-8" stroke-width="2"/>'),
+  stats: svg('<path d="M4 16V9.5M8.7 16V5M13.3 16v-4.5M18 16H2.5" transform="translate(.5 0)"/>'),
   replay: svg('<path d="M4 10a6 6 0 1 0 1.8-4.3"/><path d="M4 3.5V7h3.5"/><path d="M8.6 7.6v4.8l3.8-2.4z" fill="currentColor" stroke-width="1.2"/>'),
 };
 

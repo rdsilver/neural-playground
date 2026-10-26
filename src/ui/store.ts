@@ -43,6 +43,11 @@ export class Store {
   doc: DocInfo;
   index: NetIndex;
   selection: Selection = EMPTY_SELECTION;
+  /**
+   * The current selection was made in passing (a neuron clicked to poke it
+   * while running): show it on the board, but do not open the inspector.
+   */
+  selectionQuiet = false;
   tool: Tool = 'select';
   kind: NeuronKind = 'normal';
   readonly history = new History<Snapshot>();
@@ -118,17 +123,18 @@ export class Store {
     const c = s.connection;
     const connection = c && this.index.pairs.has(pairKey(c.from, c.to)) ? c : null;
     if (neurons.length !== s.neurons.size || texts.length !== s.texts.size || connection !== c) {
-      this.select({ neurons: new Set(neurons), texts: new Set(texts), connection });
+      this.select({ neurons: new Set(neurons), texts: new Set(texts), connection }, this.selectionQuiet);
     }
   }
 
-  select(selection: Selection): void {
+  select(selection: Selection, quiet = false): void {
     this.selection = selection;
+    this.selectionQuiet = quiet;
     this.emit('selection', selection);
   }
 
-  selectOnly(kind: 'neuron' | 'text', id: string): void {
-    this.select({ neurons: new Set(kind === 'neuron' ? [id] : []), texts: new Set(kind === 'text' ? [id] : []), connection: null });
+  selectOnly(kind: 'neuron' | 'text', id: string, quiet = false): void {
+    this.select({ neurons: new Set(kind === 'neuron' ? [id] : []), texts: new Set(kind === 'text' ? [id] : []), connection: null }, quiet);
   }
 
   /** Add or remove one item from a multi-selection (shift-click). */

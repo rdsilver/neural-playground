@@ -58,4 +58,16 @@ describe('Store', () => {
     store.toggleSelected('neuron', 'b');
     expect(store.selectedNeuron).toBeUndefined();
   });
+
+  it('marks selections made in passing as quiet, and keeps that through edits', () => {
+    const store = new Store(sample(), { title: 'Sample' });
+    const seen: boolean[] = [];
+    store.on('selection', () => seen.push(store.selectionQuiet));
+    store.selectOnly('neuron', 'a', true);
+    store.selectOnly('neuron', 'a');
+    store.select({ neurons: new Set(['a', 'b']), texts: new Set(), connection: null }, true);
+    store.commit(deleteItems(store.network, { neurons: ['a'] }), 'Delete');
+    expect(seen).toEqual([true, false, true, true]);
+    expect([...store.selection.neurons]).toEqual(['b']);
+  });
 });

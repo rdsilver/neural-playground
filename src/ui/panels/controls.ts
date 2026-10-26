@@ -5,9 +5,10 @@ import { h } from '../dom';
 import { icons } from '../icons';
 import { tipped } from './tooltip';
 
+/** A group of inspector rows, with an optional small heading and header actions. */
 export function section(title: string, actions: HTMLElement[], ...body: (HTMLElement | null | false)[]): HTMLElement {
-  const head = h('div', { class: 'insp-head' }, h('h2', { class: 'insp-title', text: title }), ...actions);
-  return h('section', { class: 'insp-section', 'aria-label': title }, head, ...body);
+  const head = title || actions.length ? h('div', { class: 'insp-sec-head' }, h('h3', { class: 'insp-sec-title', text: title }), ...actions) : null;
+  return h('section', { class: 'insp-section', 'aria-label': title || undefined }, head, ...body);
 }
 
 export function prop(label: string, control: HTMLElement, note?: string, labelFor?: string): HTMLElement {

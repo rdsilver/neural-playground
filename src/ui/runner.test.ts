@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NetworkBuilder, TICKS_PER_SECOND } from '../engine';
-import { clampSpeed, formatSimTime, formatSpeed, MAX_PULSES, MAX_TICKS_PER_FRAME, nudgeSpeed, Runner } from './runner';
+import { clampSpeed, DEMO_CAPTION_TAIL, formatSimTime, formatSpeed, MAX_PULSES, MAX_TICKS_PER_FRAME, nudgeSpeed, Runner } from './runner';
 
 function relay() {
   const b = new NetworkBuilder();
@@ -86,6 +86,48 @@ describe('Runner', () => {
     r.stopDemo();
     expect(r.sim.pendingStimuli()).toHaveLength(0);
     expect(r.demoProgress).toBeNull();
+  });
+
+  it('reports demo progress through the caption tail', () => {
+    const r = new Runner(relay());
+    expect(r.demoLive).toBe(false);
+    expect(r.demoFraction).toBe(0);
+    r.startDemo([
+      { at: 1, neuron: 'a', caption: 'one' },
+      { at: 2, caption: 'two' },
+    ]);
+    expect(r.demoLive).toBe(true);
+    r.sim.runSeconds(1);
+    expect(r.demoFraction).toBeCloseTo(1 / (2 + DEMO_CAPTION_TAIL));
+    r.sim.runSeconds(1 + DEMO_CAPTION_TAIL);
+    expect(r.demoFraction).toBe(1);
+    expect(r.demoLive).toBe(true);
+    r.sim.runSeconds(0.5);
+    expect(r.demoLive).toBe(false);
+    expect(r.demoFraction).toBe(1);
+  });
+
+  it('records the neurons a demo pokes, and the ones it is about to', () => {
+    const r = new Runner(relay());
+    r.startDemo([
+      { at: 0.5, neuron: 'a' },
+      { at: 0.5, caption: 'caption only' },
+      { at: 1, neuron: 'clock' },
+    ]);
+    // Half a second ahead: the first press is due, the second is not.
+    expect(r.upcomingTaps(TICKS_PER_SECOND / 2).map((t) => t.neuron)).toEqual(['a']);
+    expect(r.upcomingTaps(TICKS_PER_SECOND).map((t) => t.neuron)).toEqual(['a', 'clock']);
+    r.playing = true;
+    for (let i = 0; i < 40; i++) r.advance(1 / 60);
+    expect(r.taps).toEqual(['a']);
+    r.taps.length = 0;
+    for (let i = 0; i < 40; i++) r.advance(1 / 60);
+    expect(r.taps).toEqual(['clock']);
+    expect(r.upcomingTaps(1000)).toEqual([]);
+    r.reset();
+    expect(r.taps).toEqual([]);
+    r.stopDemo();
+    expect(r.upcomingTaps(1000)).toEqual([]);
   });
 
   it('steps to the next fire', () => {

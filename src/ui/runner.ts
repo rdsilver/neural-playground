@@ -20,6 +20,13 @@ const FRAME_BUDGET_MS = 10;
  */
 export const MAX_PULSES = 20_000;
 
+/**
+ * Seconds a demo's captions stay up after its last step, so the final
+ * caption can be read while its pulses land. (calculator.test.ts checks the
+ * calculator demos settle within this tail: keep the two in step.)
+ */
+export const DEMO_CAPTION_TAIL = 6;
+
 export interface DemoState {
   steps: readonly DemoStep[];
   /** Tick at which the demo was scheduled. */
@@ -33,6 +40,11 @@ export class Runner {
   demo: DemoState | null = null;
   /** Set when the runaway guard paused the simulation (cleared on reset). */
   overloaded = false;
+  /**
+   * Neurons a demo poked since the app last drained this list (the board
+   * shows a "ghost finger" tap on each so viewers see which key was pressed).
+   */
+  readonly taps: string[] = [];
   /** Fractional ticks carried over between frames (0..1 after advance). */
   private carry = 0;
 
@@ -53,7 +65,7 @@ export class Runner {
     const events: FireEvent[] = [];
     const start = this.clock();
     for (let i = 0; i < ticks; i++) {
-      for (const e of this.sim.step()) events.push(e);
+      for (const e of this.stepSim()) events.push(e);
       if (this.sim.pulses().length > MAX_PULSES) {
         this.playing = false;
         this.overloaded = true;
@@ -78,17 +90,28 @@ export class Runner {
   /** Advance exactly one tick (used by the Step button while paused). */
   step(): FireEvent[] {
     this.carry = 0;
-    return this.sim.step();
+    return this.stepSim();
   }
 
   /** Advance to the next tick on which something fires (or `limit` ticks). */
   stepToNextFire(limit = TICKS_PER_SECOND * 10): FireEvent[] {
     this.carry = 0;
     for (let i = 0; i < limit; i++) {
-      const events = this.sim.step();
+      const events = this.stepSim();
       if (events.length) return events;
     }
     return [];
+  }
+
+  /** One simulation tick, noting the demo stimuli it applies (see `taps`). */
+  private stepSim(): FireEvent[] {
+    const due = this.sim.tick + 1;
+    for (const s of this.sim.pendingStimuli()) {
+      if (s.tick > due) break;
+      // Cap the backlog in case nobody drains it (a background tab).
+      if (this.taps.length < 64) this.taps.push(s.neuron);
+    }
+    return this.sim.step();
   }
 
   /** Clear charge and pulses, rewind the clock and restart the demo, if any. */
@@ -96,6 +119,7 @@ export class Runner {
     this.sim.reset();
     this.carry = 0;
     this.overloaded = false;
+    this.taps.length = 0;
     if (this.demo) this.startDemo(this.demo.steps);
   }
 
@@ -112,6 +136,7 @@ export class Runner {
 
   stopDemo(): void {
     this.demo = null;
+    this.taps.length = 0;
     this.sim.clearSchedule();
   }
 
@@ -132,10 +157,37 @@ export class Runner {
     return { done: this.demo.steps.filter((s) => s.at <= t).length, total: this.demo.steps.length };
   }
 
-  /** Seconds after which the demo is over (its last step plus a moment to settle). */
+  /** Seconds into the demo of its last step. */
   get demoEndsAt(): number {
     if (!this.demo || !this.demo.steps.length) return 0;
     return Math.max(...this.demo.steps.map((s) => s.at));
+  }
+
+  /** True while the demo is playing or its last caption is still up. */
+  get demoLive(): boolean {
+    return !!this.demo && this.demoSeconds <= this.demoEndsAt + DEMO_CAPTION_TAIL;
+  }
+
+  /** How far through the demo (including the caption tail) we are, 0..1. */
+  get demoFraction(): number {
+    if (!this.demo) return 0;
+    return Math.min(1, Math.max(0, this.demoSeconds / (this.demoEndsAt + DEMO_CAPTION_TAIL)));
+  }
+
+  /**
+   * Demo stimuli due within the next `ticks` ticks, soonest first, with how
+   * many ticks away each is (for drawing the ghost finger before a press).
+   */
+  upcomingTaps(ticks: number): { neuron: string; inTicks: number }[] {
+    const out: { neuron: string; inTicks: number }[] = [];
+    if (!this.demo) return out;
+    const now = this.renderTick;
+    for (const s of this.sim.pendingStimuli()) {
+      const inTicks = s.tick - now;
+      if (inTicks > ticks) break;
+      out.push({ neuron: s.neuron, inTicks: Math.max(0, inTicks) });
+    }
+    return out;
   }
 }
 

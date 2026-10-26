@@ -122,17 +122,46 @@ export function interpolateView(a: View, b: View, t: number): View {
   return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, scale };
 }
 
+/** Space covered by floating UI on each side of the board, in CSS pixels. */
+export interface Insets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 /**
  * The view that fits `bounds` (world units) inside a viewport, leaving
  * `padding` CSS pixels on every side and never zooming in past `maxScale`.
  */
 export function fitView(bounds: Bounds, width: number, height: number, padding = 48, maxScale = 56): View {
+  return fitViewIn(bounds, width, height, { top: padding, right: padding, bottom: padding, left: padding }, maxScale);
+}
+
+/**
+ * The view that fits `bounds` inside the part of the viewport left free by
+ * `insets`, centred in that free area.
+ */
+export function fitViewIn(bounds: Bounds, width: number, height: number, insets: Insets, maxScale = 56): View {
   const bw = Math.max(1, bounds.maxX - bounds.minX);
   const bh = Math.max(1, bounds.maxY - bounds.minY);
-  const availW = Math.max(40, width - padding * 2);
-  const availH = Math.max(40, height - padding * 2);
+  const availW = Math.max(40, width - insets.left - insets.right);
+  const availH = Math.max(40, height - insets.top - insets.bottom);
   const scale = clampScale(Math.min(availW / bw, availH / bh, maxScale));
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
-  return { x: cx - width / 2 / scale, y: cy - height / 2 / scale, scale };
+  // Centre of the free area, in screen pixels.
+  const sx = insets.left + availW / 2;
+  const sy = insets.top + availH / 2;
+  return { x: cx - sx / scale, y: cy - sy / scale, scale };
+}
+
+/** Of several ways to frame the free area, the one that shows `bounds` biggest (earlier wins ties). */
+export function bestFit(bounds: Bounds, width: number, height: number, options: readonly Insets[], maxScale = 56): View {
+  let best: View | null = null;
+  for (const insets of options) {
+    const view = fitViewIn(bounds, width, height, insets, maxScale);
+    if (!best || view.scale > best.scale * 1.02) best = view;
+  }
+  return best ?? fitView(bounds, width, height, 0, maxScale);
 }

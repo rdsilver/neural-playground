@@ -72,13 +72,15 @@ export interface Settings {
   muted: boolean;
   volume: number;
   theme: 'dark' | 'light';
-  /** Example ids whose notes card the user dismissed. */
+  /** Example ids whose notes card the user collapsed. */
   dismissedNotes: string[];
   /** Set once the user has opened the examples gallery. */
   seenGallery: boolean;
+  /** "Try this" items ticked off, by example id (indexes into tryThis). */
+  tried: Record<string, number[]>;
 }
 
-export const DEFAULT_SETTINGS: Settings = { muted: false, volume: 0.7, theme: 'dark', dismissedNotes: [], seenGallery: false };
+export const DEFAULT_SETTINGS: Settings = { muted: false, volume: 0.7, theme: 'dark', dismissedNotes: [], seenGallery: false, tried: {} };
 
 export function readSettings(storage: Storage | undefined = safeStorage()): Settings {
   try {
@@ -91,10 +93,34 @@ export function readSettings(storage: Storage | undefined = safeStorage()): Sett
       theme: data.theme === 'light' ? 'light' : 'dark',
       dismissedNotes: Array.isArray(data.dismissedNotes) ? data.dismissedNotes.filter((s) => typeof s === 'string').slice(-50) : [],
       seenGallery: data.seenGallery === true,
+      tried: readTried(data.tried),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
+}
+
+/** Validate a stored checklist map: string keys, small non-negative integer lists. */
+function readTried(value: unknown): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  for (const [id, list] of Object.entries(value).slice(0, 100)) {
+    if (!Array.isArray(list)) continue;
+    const items = [...new Set(list.filter((i): i is number => Number.isInteger(i) && i >= 0 && i < 50))].sort((a, b) => a - b);
+    if (items.length) out[id] = items;
+  }
+  return out;
+}
+
+/** Tick or untick a "Try this" item, returning the new checklist map. */
+export function setTried(tried: Record<string, number[]>, exampleId: string, index: number, done: boolean): Record<string, number[]> {
+  const items = new Set(tried[exampleId] ?? []);
+  if (done) items.add(index);
+  else items.delete(index);
+  const next = { ...tried };
+  if (items.size) next[exampleId] = [...items].sort((a, b) => a - b);
+  else delete next[exampleId];
+  return next;
 }
 
 export function writeSettings(settings: Settings, storage: Storage | undefined = safeStorage()): void {

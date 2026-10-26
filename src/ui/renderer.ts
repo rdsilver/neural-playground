@@ -1,7 +1,9 @@
 // Canvas 2D renderer for the board. Stateless about the network (it is
 // handed a Scene every frame) except for short-lived visual effects: fire
-// flashes and poke ripples, which are timed in real milliseconds so they
-// look the same at every simulation speed.
+// flashes, poke ripples and the demo's ghost-finger taps, which are timed in
+// real milliseconds so they look the same at every simulation speed. With
+// prefers-reduced-motion it drops the decorative motion (pulse trails,
+// growing rings, floating "+1"s) and keeps only what carries meaning.
 
 import {
   digitText,
@@ -15,6 +17,7 @@ import {
   type TextSpec,
 } from '../engine';
 import type { Bounds, Camera } from './camera';
+import { prefersReducedMotion } from './dom';
 import { connectionPath, endTangent, isSquare, pathBounds, pathLength, type ConnectionPath } from './geometry';
 import { pairKey, type NetIndex } from './netops';
 import type { Selection, Tool } from './store';
@@ -23,6 +26,8 @@ import { withAlpha, type Palette } from './theme';
 const TAU = Math.PI * 2;
 const FLASH_MS = 340;
 const RIPPLE_MS = 700;
+/** How long a demo's ghost-finger tap stays on a neuron. */
+const TAP_MS = 650;
 /** Length of a pulse's comet tail, in cells. */
 const TRAIL_CELLS = 0.5;
 const UI_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
@@ -59,6 +64,9 @@ export interface Scene {
   camera: Camera;
   /** Neuron whose connection handle is visible, if any. */
   handleFor: string | null;
+  /** Demo presses coming up within `tapLead` ticks (the ghost finger hovers over them). */
+  upcomingTaps: readonly { neuron: string; inTicks: number }[];
+  tapLead: number;
 }
 
 interface Ripple {
@@ -95,11 +103,14 @@ export class Renderer {
   private palette!: Palette;
   private flashes = new Map<string, number>();
   private ripples: Ripple[] = [];
+  private taps: { id: string; start: number }[] = [];
+  private reduced = prefersReducedMotion();
   private pathCache: { network: Network | null; paths: PathSet } = { network: null, paths: { byKey: new Map(), byFrom: new Map() } };
   private widthCache = new Map<string, number>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
+    matchMedia('(prefers-reduced-motion: reduce)').addEventListener?.('change', (e) => (this.reduced = e.matches));
   }
 
   setPalette(palette: Palette): void {
@@ -128,15 +139,21 @@ export class Renderer {
     this.ripples.push({ id, start: now, charge });
   }
 
+  /** A demo pressed this neuron: show a ghost-finger tap on it. */
+  demoTap(id: string, now: number): void {
+    this.taps.push({ id, start: now });
+  }
+
   clearEffects(): void {
     this.flashes.clear();
     this.ripples = [];
+    this.taps = [];
   }
 
-  /** True while flashes or ripples are still fading (keep redrawing). */
+  /** True while flashes, ripples or taps are still fading (keep redrawing). */
   animating(now: number): boolean {
     for (const t of this.flashes.values()) if (now - t < FLASH_MS) return true;
-    return this.ripples.some((r) => now - r.start < RIPPLE_MS);
+    return this.ripples.some((r) => now - r.start < RIPPLE_MS) || this.taps.some((t) => now - t.start < TAP_MS);
   }
 
   /** Connection paths for the current network (cached until it changes). */
@@ -200,7 +217,9 @@ export class Renderer {
     }
 
     this.drawOverlays(scene, pos, now);
+    this.drawTaps(scene, now);
     this.ripples = this.ripples.filter((r) => now - r.start < RIPPLE_MS);
+    this.taps = this.taps.filter((t) => now - t.start < TAP_MS);
   }
 
   private flashLevel(id: string, now: number): number {
@@ -214,40 +233,43 @@ export class Renderer {
     return 1 - age / FLASH_MS;
   }
 
+  /**
+   * A quiet dot grid: a dot on every cell corner when zoomed in close enough
+   * to place neurons, and a slightly larger one every 8 cells for scale.
+   * All dots of a size go into one path, so this stays cheap per frame.
+   */
   private drawGrid(cam: Camera, view: Bounds): void {
-    const { ctx, palette: p } = this;
+    const { ctx, palette: p, dpr } = this;
     const s = cam.scale;
     const x0 = Math.floor(view.minX);
     const y0 = Math.floor(view.minY);
     const x1 = Math.ceil(view.maxX);
     const y1 = Math.ceil(view.maxY);
-    const half = 0.5 / this.dpr;
-    const line = (major: boolean) => {
+    const snap = (v: number) => Math.round(v * dpr) / dpr;
+    const dots = (major: boolean, r: number) => {
       ctx.beginPath();
-      for (let x = x0; x <= x1; x++) {
-        if ((x % 8 === 0) !== major) continue;
-        const sx = Math.round((x - cam.x) * s * this.dpr) / this.dpr + half;
-        ctx.moveTo(sx, 0);
-        ctx.lineTo(sx, this.height);
+      const stepX = major ? 8 : 1;
+      const startX = major ? Math.ceil(x0 / 8) * 8 : x0;
+      const startY = major ? Math.ceil(y0 / 8) * 8 : y0;
+      for (let y = startY; y <= y1; y += stepX) {
+        const sy = snap((y - cam.y) * s);
+        for (let x = startX; x <= x1; x += stepX) {
+          if (!major && x % 8 === 0 && y % 8 === 0) continue;
+          ctx.rect(snap((x - cam.x) * s) - r, sy - r, r * 2, r * 2);
+        }
       }
-      for (let y = y0; y <= y1; y++) {
-        if ((y % 8 === 0) !== major) continue;
-        const sy = Math.round((y - cam.y) * s * this.dpr) / this.dpr + half;
-        ctx.moveTo(0, sy);
-        ctx.lineTo(this.width, sy);
-      }
+      ctx.fill();
     };
-    ctx.lineWidth = 1 / this.dpr;
-    if (s >= 9) {
-      ctx.globalAlpha = Math.min(1, (s - 9) / 10);
-      line(false);
-      ctx.strokeStyle = p.grid;
-      ctx.stroke();
+    if (s >= 16) {
+      ctx.globalAlpha = Math.min(1, (s - 16) / 12);
+      ctx.fillStyle = p.grid;
+      dots(false, Math.max(0.75, Math.min(1.1, s / 36)));
       ctx.globalAlpha = 1;
     }
-    line(true);
-    ctx.strokeStyle = p.gridMajor;
-    ctx.stroke();
+    if (s * 8 >= 20) {
+      ctx.fillStyle = p.gridMajor;
+      dots(true, Math.max(1, Math.min(1.6, s / 26)));
+    }
   }
 
   private drawWires(scene: Scene, paths: Map<string, ConnectionPath>, view: Bounds, active: ReadonlySet<ConnectionPath>): void {
@@ -359,7 +381,8 @@ export class Renderer {
     const core = Math.max(2.2, s * 0.085);
     // Thousands of pulses: drop the trails; tens of thousands: squares (cheaper than arcs).
     const count = (pos.length + neg.length) / 4;
-    const plain = count > 2500;
+    // Trails are decoration: dropped for reduced motion and for crowds.
+    const plain = count > 2500 || this.reduced;
     const cheap = count > 8000;
     // Two passes fake a fading tail: the whole tail thin and faint, the half
     // nearest the head wider. Additive blending makes it glow on dark boards.
@@ -422,8 +445,9 @@ export class Renderer {
     const half = s * 0.42;
     const charge = scene.sim.charge(n.id);
     if (flash > 0) {
+      const grow = s * 0.08 * (this.reduced ? 1 : flash);
       ctx.beginPath();
-      ctx.roundRect(cx - half - s * 0.08 * flash, cy - half - s * 0.08 * flash, 2 * (half + s * 0.08 * flash), 2 * (half + s * 0.08 * flash), s * 0.2);
+      ctx.roundRect(cx - half - grow, cy - half - grow, 2 * (half + grow), 2 * (half + grow), s * 0.2);
       ctx.fillStyle = withAlpha(p.accent, 0.3 * flash);
       ctx.fill();
     }
@@ -470,7 +494,7 @@ export class Renderer {
 
     if (flash > 0) {
       ctx.beginPath();
-      ctx.arc(cx, cy, ringR + s * (0.06 + 0.16 * (1 - flash)), 0, TAU);
+      ctx.arc(cx, cy, ringR + s * (this.reduced ? 0.08 : 0.06 + 0.16 * (1 - flash)), 0, TAU);
       ctx.fillStyle = withAlpha(color, 0.28 * flash);
       ctx.fill();
     }
@@ -486,11 +510,13 @@ export class Renderer {
     if (s < 6) return;
 
     // Ring: charge towards threshold, or a timer's countdown.
+    const charge = scene.sim.charge(n.id);
     if (s >= 10) {
       if (n.kind === 'timer') this.drawTimerRing(cx, cy, ringR, ringW, color, timerFrac, dim);
-      else this.drawChargeRing(cx, cy, ringR, ringW, color, scene.sim.charge(n.id), n.threshold);
+      else this.drawChargeRing(cx, cy, ringR, ringW, color, charge, n.threshold);
     }
     if (s < 14) return;
+    if (charge < 0 && n.kind !== 'timer' && s >= 16) this.drawNegativeBadge(charge, cx + ringR * 0.8, cy - ringR * 0.8, s);
 
     const ink = flash > 0.45 ? p.inkOnKind : color;
     const focused = scene.selection.neurons.has(n.id) || (scene.hover?.type === 'neuron' && scene.hover.id === n.id);
@@ -553,6 +579,27 @@ export class Renderer {
         ctx.fillText(caption, cx, cy + ringR + ringW);
       }
     }
+  }
+
+  /** A small red "−5" pill: an inhibited neuron's (negative) charge, at a glance. */
+  private drawNegativeBadge(charge: number, x: number, y: number, s: number): void {
+    const { ctx, palette: p } = this;
+    const text = `−${-charge}`;
+    const size = Math.max(9, Math.min(14, s * 0.22));
+    ctx.font = `700 ${size}px ${UI_FONT}`;
+    const w = ctx.measureText(text).width + size * 0.8;
+    const hgt = size * 1.45;
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y - hgt / 2, w, hgt, hgt / 2);
+    ctx.fillStyle = p.negCharge;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, s * 0.04);
+    ctx.strokeStyle = p.canvas;
+    ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = p.inkOnKind;
+    ctx.fillText(text, x, y + size * 0.04);
   }
 
   /** Centred text inside a neuron, shrunk to fit. */
@@ -763,8 +810,10 @@ export class Renderer {
       const t = (now - r.start) / RIPPLE_MS;
       if (t >= 1) continue;
       const c = cam.toScreen(n.x + 0.5, n.y + 0.5);
+      // Reduced motion: the ring and the "+1" stay put and simply fade.
+      const grow = this.reduced ? 0 : t;
       ctx.beginPath();
-      ctx.arc(c.x, c.y, s * (0.45 + 0.5 * t), 0, TAU);
+      ctx.arc(c.x, c.y, s * (0.5 + 0.45 * grow), 0, TAU);
       ctx.lineWidth = 2 * (1 - t) + 0.5;
       ctx.strokeStyle = withAlpha(p.accent, 0.8 * (1 - t));
       ctx.stroke();
@@ -772,7 +821,48 @@ export class Renderer {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = withAlpha(p.accent, 1 - t * t);
-      ctx.fillText(r.charge > 0 ? `+${r.charge}` : `${r.charge}`, c.x, c.y - s * (0.5 + 0.35 * t));
+      ctx.fillText(r.charge > 0 ? `+${r.charge}` : `${r.charge}`, c.x, c.y - s * (0.5 + 0.35 * grow));
+    }
+  }
+
+  /**
+   * The demo's "ghost finger", like a phone's show-taps: a soft pad settles
+   * onto a key just before the demo presses it, then lifts off with a ring.
+   */
+  private drawTaps(scene: Scene, now: number): void {
+    const { ctx, palette: p } = this;
+    const cam = scene.camera;
+    const s = cam.scale;
+    if (s < 6) return;
+    const pad = (n: NeuronSpec, r: number, alpha: number) => {
+      const c = cam.toScreen(n.x + 0.5, n.y + 0.5);
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, TAU);
+      ctx.fillStyle = withAlpha(p.ink, 0.22 * alpha);
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, s * 0.05);
+      ctx.strokeStyle = withAlpha(p.ink, 0.7 * alpha);
+      ctx.stroke();
+      return c;
+    };
+    for (const t of scene.upcomingTaps) {
+      const n = scene.index.byId.get(t.neuron);
+      if (!n) continue;
+      const k = 1 - Math.min(1, t.inTicks / Math.max(1, scene.tapLead));
+      pad(n, s * 0.46 * (this.reduced ? 1 : 1 + 0.5 * (1 - k)), k * k);
+    }
+    for (const tap of this.taps) {
+      const n = scene.index.byId.get(tap.id);
+      if (!n) continue;
+      const t = (now - tap.start) / TAP_MS;
+      if (t >= 1) continue;
+      const c = pad(n, s * 0.46, 1 - t);
+      if (this.reduced) continue;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, s * (0.5 + 0.55 * t), 0, TAU);
+      ctx.lineWidth = Math.max(1, 2.5 * (1 - t));
+      ctx.strokeStyle = withAlpha(p.ink, 0.55 * (1 - t));
+      ctx.stroke();
     }
   }
 

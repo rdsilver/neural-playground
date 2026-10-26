@@ -35,7 +35,7 @@ export class HelpDialog {
     row('Context menu', ['shift+f10']);
     row('Cancel / deselect', ['escape']);
 
-    const mouse = h('dl', { class: 'keys' });
+    const mouse = h('dl', { class: 'keys gestures' });
     const pair = (a: string, b: string) => mouse.append(h('dt', { text: a }), h('dd', { class: 'muted', text: b }));
     pair('Place', 'pick a kind, click an empty cell');
     pair('Poke', 'click a neuron while running');
@@ -43,8 +43,9 @@ export class HelpDialog {
     pair('Two-way', 'hold Shift while connecting');
     pair('Move', 'drag a neuron; Shift-drag empty space to box-select');
     pair('Pan', 'drag empty space, right or middle mouse, or Space + drag');
-    pair('Zoom', 'scroll, pinch, or the buttons bottom right');
-    pair('Menu', 'right-click (or long-press) a neuron, wire or empty cell');
+    pair('Zoom', 'scroll, pinch, or the buttons bottom left');
+    pair('Inspect', 'right-click (or long-press) a neuron, wire or note');
+    pair('Menu', 'right-click a neuron, wire or empty cell (long-press empty board on touch)');
     pair('Touch', 'tap to place or poke, drag to pan, pinch to zoom');
 
     this.el = h(
