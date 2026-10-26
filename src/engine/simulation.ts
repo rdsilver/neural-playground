@@ -41,6 +41,13 @@ export interface NeuronState {
   nextTimerTick: number;
 }
 
+/** A stimulus queued to happen at a future tick (see Simulation.schedule). */
+export interface ScheduledStimulus {
+  readonly tick: number;
+  readonly neuron: string;
+  readonly charge: number;
+}
+
 export interface SimulationOptions {
   /** Seed for Random neurons. Same seed + same inputs = same run. */
   seed?: number;
@@ -65,9 +72,10 @@ function freshState(): NeuronState {
 /**
  * Deterministic, DOM-free simulation of a network of integrate-and-fire
  * neurons. Each call to step() advances time by one tick:
- *   1. pulses that have reached their target deliver their charge, in order
+ *   1. scheduled stimuli that are due are applied (see schedule());
+ *   2. pulses that have reached their target deliver their charge, in order
  *      of arrival (ties broken by creation order);
- *   2. timer neurons that are due fire, in network order.
+ *   3. timer neurons that are due fire, in network order.
  * A neuron whose charge reaches its threshold resets to zero and fires.
  */
 export class Simulation {
@@ -77,6 +85,7 @@ export class Simulation {
   private timers: NeuronSpec[] = [];
   private states = new Map<string, NeuronState>();
   private queue = new PulseQueue();
+  private scheduled: ScheduledStimulus[] = [];
   private nextPulseId = 1;
   private rng: () => number;
   private readonly seed: number;
@@ -131,6 +140,7 @@ export class Simulation {
   reset(): void {
     this.states = new Map(this.net.neurons.map((n) => [n.id, freshState()]));
     this.queue = new PulseQueue();
+    this.scheduled = [];
     this.nextPulseId = 1;
     this.currentTick = 0;
     this.rng = mulberry32(this.seed);
@@ -170,6 +180,27 @@ export class Simulation {
     return events;
   }
 
+  /**
+   * Queue a stimulus (like a click) for a future tick. Stimuli due on the
+   * same tick apply in the order they were scheduled, before any pulse
+   * arrivals on that tick. Used by example demos; cleared by reset().
+   */
+  schedule(tick: number, neuron: string, charge = 1): void {
+    const entry = { tick: Math.max(this.currentTick + 1, Math.round(tick)), neuron, charge };
+    let i = this.scheduled.length;
+    while (i > 0 && this.scheduled[i - 1]!.tick > entry.tick) i--;
+    this.scheduled.splice(i, 0, entry);
+  }
+
+  /** Stimuli still waiting to happen, soonest first. */
+  pendingStimuli(): readonly ScheduledStimulus[] {
+    return this.scheduled;
+  }
+
+  clearSchedule(): void {
+    this.scheduled = [];
+  }
+
   /** Make a neuron fire immediately, regardless of its charge or kind. */
   fire(id: string): FireEvent[] {
     const events: FireEvent[] = [];
@@ -181,6 +212,11 @@ export class Simulation {
   step(): FireEvent[] {
     const tick = ++this.currentTick;
     const events: FireEvent[] = [];
+
+    while (this.scheduled.length && this.scheduled[0]!.tick <= tick) {
+      const { neuron, charge } = this.scheduled.shift()!;
+      this.deliver(neuron, charge, events);
+    }
 
     let pulse: Pulse | undefined;
     while ((pulse = this.queue.popDue(tick))) this.deliver(pulse.to, pulse.charge, events);
@@ -211,7 +247,7 @@ export class Simulation {
 
   /** True when nothing is in flight and no timer will fire again. */
   isIdle(): boolean {
-    if (this.queue.items.length > 0) return false;
+    if (this.queue.items.length > 0 || this.scheduled.length > 0) return false;
     return this.timers.every((t) => {
       const times = t.times ?? -1;
       return times >= 0 && this.states.get(t.id)!.timerFires >= times;

@@ -180,4 +180,20 @@ describe('Simulation', () => {
     expect(sim.state(a)!.fireCount).toBeGreaterThan(8);
     expect(sim.pulses()).toHaveLength(1);
   });
+
+  it('applies scheduled stimuli on their tick, in order, and clears them on reset', () => {
+    const b = new NetworkBuilder();
+    const a = b.normal(0, 0, 2, { id: 'a' });
+    const sim = new Simulation(b.build());
+    sim.schedule(10, a);
+    sim.schedule(5, a);
+    sim.run(5);
+    expect(sim.charge(a)).toBe(1);
+    expect(sim.isIdle()).toBe(false);
+    const events = sim.run(5);
+    expect(events.map((e) => e.tick)).toEqual([10]);
+    sim.schedule(20, a);
+    sim.reset();
+    expect(sim.pendingStimuli()).toHaveLength(0);
+  });
 });

@@ -2,6 +2,7 @@ import { CLASSIC_EXAMPLES } from './classics';
 import { EXAMPLE_CATEGORIES, type Example } from './types';
 
 export * from './types';
+export * from './demo';
 
 /** Every built-in example, in gallery order. */
 export const EXAMPLES: Example[] = [...CLASSIC_EXAMPLES].sort(

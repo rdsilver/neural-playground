@@ -57,3 +57,12 @@ describe('classic examples', () => {
     expect(active.length).toBe(network.neurons.filter((n) => n.kind === 'normal').length);
   });
 });
+
+describe('demos', () => {
+  it('only poke neurons that exist', () => {
+    for (const example of EXAMPLES) {
+      const ids = new Set(example.network.neurons.map((n) => n.id));
+      for (const step of example.demo ?? []) expect(ids.has(step.neuron), `${example.id}: ${step.neuron}`).toBe(true);
+    }
+  });
+});
