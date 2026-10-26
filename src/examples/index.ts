@@ -1,4 +1,5 @@
 import { ARITHMETIC_EXAMPLES } from './arithmetic';
+import { BASICS_EXAMPLES } from './basics';
 import { CALCULATOR_EXAMPLES } from './calculator';
 import { CLASSIC_EXAMPLES } from './classics';
 import { EXAMPLE_CATEGORIES, type Example } from './types';
@@ -8,6 +9,7 @@ export * from './demo';
 
 /** Every built-in example, in gallery order (stable within a category). */
 export const EXAMPLES: Example[] = [
+  ...BASICS_EXAMPLES,
   ...CALCULATOR_EXAMPLES,
   ...ARITHMETIC_EXAMPLES,
   ...CLASSIC_EXAMPLES,
