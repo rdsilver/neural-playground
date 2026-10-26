@@ -3,12 +3,12 @@ import type { Network } from '../engine';
 export const EXAMPLE_CATEGORIES = ['Start here', 'Calculators', 'Counting', 'Music', 'Patterns', 'Classics'] as const;
 export type ExampleCategory = (typeof EXAMPLE_CATEGORIES)[number];
 
-/** One step of an example's demo: poke a neuron at a moment in time. */
+/** One step of an example's demo: poke a neuron and/or change the caption. */
 export interface DemoStep {
   /** Seconds after the example starts running. */
   at: number;
-  /** Neuron to stimulate (+1 charge, like a click). */
-  neuron: string;
+  /** Neuron to stimulate (+1 charge, like a click). Omit for a caption-only step. */
+  neuron?: string;
   /** Optional caption to show while the demo plays, e.g. "47 + 85". */
   caption?: string;
 }

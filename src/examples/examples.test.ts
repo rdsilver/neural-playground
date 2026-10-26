@@ -62,7 +62,10 @@ describe('demos', () => {
   it('only poke neurons that exist', () => {
     for (const example of EXAMPLES) {
       const ids = new Set(example.network.neurons.map((n) => n.id));
-      for (const step of example.demo ?? []) expect(ids.has(step.neuron), `${example.id}: ${step.neuron}`).toBe(true);
+      for (const step of example.demo ?? []) {
+        if (step.neuron !== undefined) expect(ids.has(step.neuron), `${example.id}: ${step.neuron}`).toBe(true);
+        else expect(step.caption, `${example.id}: a step needs a neuron or a caption`).toBeTruthy();
+      }
     }
   });
 });

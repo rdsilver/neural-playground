@@ -123,7 +123,9 @@ function randomClicks(seed: number, targets: readonly string[], count: number, h
 
 /** Demo steps as clicks, on the ticks scheduleDemo would use on a fresh run. */
 const demoClicks = (id: string): Array<[number, string]> =>
-  findExample(id)!.demo!.map((step) => [Math.max(1, Math.round(step.at * TICKS_PER_SECOND)), step.neuron]);
+  findExample(id)!.demo!.flatMap((step): Array<[number, string]> =>
+    step.neuron === undefined ? [] : [[Math.max(1, Math.round(step.at * TICKS_PER_SECOND)), step.neuron]],
+  );
 
 /**
  * A decimal counter read so that it never wraps: the value shown plus 1000

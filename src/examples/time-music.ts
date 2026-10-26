@@ -132,9 +132,9 @@ function rowYourBoat(): Network {
   return b.build();
 }
 
-/** Caption-only demo steps: timers ignore pokes, so poking one changes nothing. */
-function captions(neuron: string, steps: Array<[number, string]>): DemoStep[] {
-  return steps.map(([at, caption]) => ({ at, neuron, caption }));
+/** Caption-only demo steps: they change the caption and poke nothing. */
+function captions(steps: Array<[number, string]>): DemoStep[] {
+  return steps.map(([at, caption]) => ({ at, caption }));
 }
 
 // ---- Polyrhythm ------------------------------------------------------------
@@ -260,7 +260,7 @@ export const TIME_MUSIC_EXAMPLES: Example[] = [
         neuron: 'sec-tens',
         ...(i === 0 ? { caption: 'Five clicks on the tens of seconds set the clock to 00:50…' } : {}),
       })),
-      ...captions('clock', [[9.4, '…so the minute turns soon: watch the carry ripple right to left.']]),
+      ...captions([[9.4, '…so the minute turns soon: watch the carry ripple right to left.']]),
     ],
   },
   {
@@ -278,7 +278,7 @@ export const TIME_MUSIC_EXAMPLES: Example[] = [
       'Set the timer to fire once to hear the plain tune, or 8 times for a longer round.',
     ],
     network: rowYourBoat(),
-    demo: captions('voices', [
+    demo: captions([
       [0.1, 'Voice 1: “Row, row, row your boat…”'],
       [3, 'Voice 2 comes in as voice 1 turns the first corner.'],
       [6, 'Voice 3 joins: three lines of the song at once.'],

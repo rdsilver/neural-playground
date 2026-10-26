@@ -479,7 +479,7 @@ describe('row, row, row your boat', () => {
     const plain = new Simulation(round.network);
     const withDemo = new Simulation(round.network);
     scheduleDemo(withDemo, round.demo!);
-    expect(round.demo!.every((s) => s.neuron === 'voices' && s.caption)).toBe(true);
+    expect(round.demo!.every((s) => s.neuron === undefined && s.caption)).toBe(true);
     expect(withDemo.run(60 * 25)).toEqual(plain.run(60 * 25));
   });
 
