@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NetworkBuilder } from '../engine';
-import { DEFAULT_SETTINGS, exampleUrl, parseHash, readAutosave, readSettings, setTried, shareUrl, slugify, writeAutosave, writeSettings } from './persistence';
+import { EXAMPLES } from '../examples';
+import { DEFAULT_SETTINGS, exampleUrl, isPristineExample, parseHash, readAutosave, readSettings, setTried, shareUrl, shouldAutosave, slugify, writeAutosave, writeSettings } from './persistence';
 
 class MemoryStorage implements Storage {
   private data = new Map<string, string>();
@@ -89,6 +90,31 @@ describe('storage', () => {
     expect(readAutosave(broken)).toBeNull();
     expect(readSettings(broken)).toEqual(DEFAULT_SETTINGS);
     expect(() => writeSettings(DEFAULT_SETTINGS, broken)).not.toThrow();
+  });
+});
+
+describe('autosave protection', () => {
+  const example = EXAMPLES[0]!;
+  const pristine = { network: example.network, doc: { title: example.title, exampleId: example.id } };
+  const edited = { ...pristine, network: { ...example.network, neurons: example.network.neurons.slice(1) } };
+  const own = { network: { version: 2 as const, neurons: [{ id: 'a', kind: 'normal' as const, x: 0, y: 0, threshold: 2 }], connections: [], texts: [] }, doc: { title: 'Untitled network' } };
+
+  it('recognises an untouched example, even after a save/load round trip', () => {
+    expect(isPristineExample(pristine)).toBe(true);
+    const storage = new MemoryStorage();
+    writeAutosave(pristine, storage);
+    expect(isPristineExample(readAutosave(storage)!)).toBe(true);
+    expect(isPristineExample(edited)).toBe(false);
+    expect(isPristineExample(own)).toBe(false);
+    expect(isPristineExample({ ...pristine, doc: { title: 'x', exampleId: 'no-such-example' } })).toBe(false);
+  });
+
+  it('never lets an untouched example or link replace your own work', () => {
+    expect(shouldAutosave(true, own)).toBe(false);
+    expect(shouldAutosave(true, edited)).toBe(false);
+    expect(shouldAutosave(true, pristine)).toBe(true);
+    expect(shouldAutosave(true, null)).toBe(true);
+    expect(shouldAutosave(false, own)).toBe(true);
   });
 });
 

@@ -53,6 +53,8 @@ const DRAG_PX = 4;
 const TOUCH_DRAG_PX = 9;
 /** Hold a finger still this long to inspect (or, on empty board, get the menu). */
 const LONG_PRESS_MS = 500;
+/** A touch this close to a neuron's centre (screen px) counts as on it. */
+const TOUCH_SLOP_PX = 22;
 
 export class BoardInput {
   hover: Hover | null = null;
@@ -193,6 +195,35 @@ export class BoardInput {
     return { type: 'empty', ...cell };
   }
 
+  /**
+   * Fingers are blunt: a touch that just misses a neuron (landing on a wire
+   * or empty board) goes to the nearest neuron within reach, so a calculator
+   * key is pressed rather than a wire selected.
+   */
+  touchHitTest(sp: Point): Hit {
+    const hit = this.hitTest(sp);
+    if (hit.type !== 'connection' && hit.type !== 'empty') return hit;
+    const cam = this.camera;
+    const reach = Math.max(TOUCH_SLOP_PX, cam.scale * 0.5);
+    const w = cam.toWorld(sp.x, sp.y);
+    const span = Math.ceil(reach / cam.scale);
+    let best: string | null = null;
+    let bestD = reach;
+    for (let dx = -span; dx <= span; dx++) {
+      for (let dy = -span; dy <= span; dy++) {
+        const n = this.store.index.byCell.get(cellKey(Math.floor(w.x) + dx, Math.floor(w.y) + dy));
+        if (!n) continue;
+        const c = cam.toScreen(n.x + 0.5, n.y + 0.5);
+        const d = Math.hypot(sp.x - c.x, sp.y - c.y);
+        if (d < bestD) {
+          bestD = d;
+          best = n.id;
+        }
+      }
+    }
+    return best ? { type: 'neuron', id: best } : hit;
+  }
+
   private setHover(hover: Hover | null): void {
     const same = JSON.stringify(hover) === JSON.stringify(this.hover);
     this.hover = hover;
@@ -245,7 +276,8 @@ export class BoardInput {
       return;
     }
     if (e.button !== 0) return;
-    const press: Press = { type: 'press', hit: this.hitTest(p), start: p, shift: e.shiftKey, alt: e.altKey, touch: e.pointerType !== 'mouse' };
+    const touch = e.pointerType !== 'mouse';
+    const press: Press = { type: 'press', hit: touch ? this.touchHitTest(p) : this.hitTest(p), start: p, shift: e.shiftKey, alt: e.altKey, touch };
     this.gesture = press;
     if (press.touch) {
       const { clientX, clientY } = e;
@@ -340,6 +372,10 @@ export class BoardInput {
     if ((hit.type === 'neuron' && tool === 'select') || (hit.type === 'text' && (tool === 'select' || tool === 'text'))) {
       const sel = this.store.selection;
       const selected = hit.type === 'neuron' ? sel.neurons.has(hit.id) : sel.texts.has(hit.id);
+      // On touch a swipe pans: only an item already selected (tap first) is
+      // dragged, and nothing moves while running, so a swipe across a
+      // running calculator can never rewire it.
+      if (g.touch && (!selected || this.host.running)) return panInstead();
       // Drag the selection it belongs to; otherwise just this item (Shift: add it).
       let neurons: ReadonlySet<string> = sel.neurons;
       let texts: ReadonlySet<string> = sel.texts;
@@ -468,6 +504,8 @@ export class BoardInput {
         else store.selectOnly('text', hit.id);
         break;
       case 'connection':
+        // A running tap is a key press, never an inspection (long-press is).
+        if (g.touch && host.running) break;
         store.selectConnection({ from: hit.from, to: hit.to });
         break;
       case 'empty':

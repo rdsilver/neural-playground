@@ -33,7 +33,7 @@ export const CLASSIC_EXAMPLES: Example[] = [
     description:
       'Each cluster is fully connected and every neuron\'s threshold equals the number of neurons feeding it: 2 neurons with threshold 1, 3 with threshold 2, and so on up to 9 with threshold 8. A timer kicks each one off; after that the activity sustains itself forever.\n\n' +
       'Loops like these are the simplest kind of memory a network can have: activity that keeps circulating.',
-    tryThis: ['Stop one of the loops by lowering a single neuron\'s threshold, or by deleting a connection.', 'Add an Inhibitor pointing at a loop and fire it.'],
+    tryThis: ['Stop one of the loops by raising a single neuron\'s threshold by one: it misses its turn, and the whole loop goes quiet.', 'Or delete one connection inside a loop.', 'Add an Inhibitor pointing at a loop and poke it.'],
     network: legacy(stableExamples),
   },
   {

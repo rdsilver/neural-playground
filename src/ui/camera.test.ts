@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bestFit, Camera, fitView, fitViewIn, interpolateView, MAX_SCALE, MIN_SCALE } from './camera';
+import { bestFit, Camera, fitView, fitViewIn, interpolateView, MAX_SCALE, MIN_SCALE, readableFit } from './camera';
 
 describe('Camera', () => {
   it('round-trips between world and screen', () => {
@@ -100,3 +100,28 @@ describe('interpolateView', () => {
     expect(mid.y + 50 / mid.scale).toBeCloseTo(5);
   });
 });
+
+describe('readableFit', () => {
+  const wide = { minX: 0, minY: 0, maxX: 45, maxY: 20 };
+  const insets = { top: 100, right: 10, bottom: 200, left: 10 };
+  const centreX = (v: { x: number; scale: number }) => v.x + (10 + (390 - 20) / 2) / v.scale;
+
+  it('fits normally when the fit is already readable', () => {
+    const small = { minX: 0, minY: 0, maxX: 10, maxY: 5 };
+    expect(readableFit(small, 390, 844, [insets], 18)).toEqual(fitViewIn(small, 390, 844, insets));
+  });
+
+  it('never goes below the readable scale, starting from the top-left without a focus', () => {
+    const v = readableFit(wide, 390, 844, [insets], 18);
+    expect(v.scale).toBe(18);
+    // The content's left edge sits at the free area's left edge.
+    expect(v.x + 10 / 18).toBeCloseTo(0);
+  });
+
+  it('centres on a focus, clamped so no empty space shows past the content', () => {
+    expect(centreX(readableFit(wide, 390, 844, [insets], 18, { x: 30, y: 10 }))).toBeCloseTo(30);
+    const nearEdge = readableFit(wide, 390, 844, [insets], 18, { x: 44, y: 10 });
+    expect(centreX(nearEdge)).toBeCloseTo(45 - 370 / 18 / 2);
+  });
+});
+

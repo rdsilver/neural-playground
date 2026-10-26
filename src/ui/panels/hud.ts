@@ -134,7 +134,7 @@ export class Hud {
         : 'Click to poke (+1 charge) · Shift-click or right-click to inspect';
     }
     if (selectionSize(store.selection)) return touch ? 'Tap empty space to deselect' : 'Arrows move it · Delete removes it · Esc deselects';
-    if (runner.playing) return touch ? 'Tap a neuron to poke it · long-press to inspect it' : 'Click a neuron to poke it · Shift-click to inspect · Space pauses';
-    return touch ? 'Paused · tap a neuron to inspect it' : 'Paused · Space to run · click a neuron to inspect it';
+    if (runner.playing) return touch ? 'Tap a neuron to poke it · drag to pan · long-press to inspect' : 'Click a neuron to poke it · Shift-click to inspect · Space pauses';
+    return touch ? 'Paused · tap a neuron to select it, then drag to move it' : 'Paused · Space to run · click a neuron to inspect it';
   }
 }

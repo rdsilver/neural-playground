@@ -18,7 +18,7 @@ import {
 import { EXAMPLES, findExample, type Example } from '../examples';
 import { describeNeuron } from './describe';
 import { Synth } from './audio';
-import { bestFit, Camera, DEFAULT_SCALE } from './camera';
+import { Camera, DEFAULT_SCALE, readableFit } from './camera';
 import type { Command } from './commands';
 import { h, isMac, isTyping, prefersReducedMotion } from './dom';
 import { icons } from './icons';
@@ -58,7 +58,7 @@ import { ToolRail } from './panels/toolrail';
 import { TopBar } from './panels/topbar';
 import { Transport } from './panels/transport';
 import { ViewControls } from './panels/viewcontrols';
-import { exampleUrl, parseHash, readAutosave, readSettings, setTried, shareUrl, slugify, writeAutosave, writeSettings, type DocInfo, type Settings } from './persistence';
+import { exampleUrl, isPristineExample, parseHash, readAutosave, readSettings, setTried, shareUrl, shouldAutosave, slugify, writeAutosave, writeSettings, type DocInfo, type Settings } from './persistence';
 import { Renderer, type Scene } from './renderer';
 import { clampSpeed, MAX_PULSES, nudgeSpeed, Runner } from './runner';
 import { matches, parseKeys } from './shortcuts';
@@ -66,6 +66,8 @@ import { selectionSize, Store, type Tool } from './store';
 import { applyTheme, readPalette, type Palette } from './theme';
 
 const AUTOSAVE_DELAY = 400;
+/** Smallest zoom (px per cell) a fit may use on a phone: neuron labels show from 14. */
+const READABLE_SCALE = 18;
 /** The demo's ghost finger appears this long (real time) before it presses. */
 const TAP_LEAD_SECONDS = 0.35;
 
@@ -115,10 +117,14 @@ export class App implements BoardHost {
   private lastFrame = 0;
   private lastLive = 0;
   private autosaveTimer = 0;
+  /** The network last opened from a share link, while it is still untouched. */
+  private linkNetwork: Network | null = null;
   private savePending = false;
   private clip: Clip | null = null;
   private overloadShown = false;
   private wasAnimating = false;
+  /** Set when keydown took a Space press for the board (pan or play/pause). */
+  private spaceArmed = false;
   /**
    * The keyboard's cell cursor (arrows move it, 1-6 or Enter place there).
    * Shown only while the board has keyboard focus and nothing is selected.
@@ -166,10 +172,12 @@ export class App implements BoardHost {
     }
 
     const app = new App(root, initial.network, initial.doc, settings);
+    if (request?.type === 'net' && !error) app.linkNetwork = initial.network;
     app.build();
     if (initial.example) app.startExample(initial.example, false);
     else app.zoomToFit(false);
-    // A link's network is saved right away, so a reload comes back to it.
+    // A link's network is saved right away, so a reload comes back to it
+    // (unless that would replace the user's own work; see saveNow).
     if (request && !error) app.scheduleAutosave();
     if (request?.type === 'net' && !error) app.toasts.show('Opened a shared network');
     if (error) app.toasts.show(error, { error: true });
@@ -314,6 +322,8 @@ export class App implements BoardHost {
     // Notes from this frame's ticks are spread out to their own tick times.
     const firstTick = runner.sim.tick + 1;
     const ticksPerSecond = TICKS_PER_SECOND * (runner.stepping?.speed ?? runner.speed);
+    // Read before advancing, so the frame on which a step ends still draws.
+    const stepping = runner.stepping !== null;
     const events = runner.advance(dt);
     if (events.length) this.onFires(events, now, firstTick, ticksPerSecond);
     if (this.runner.overloaded !== this.overloadShown) {
@@ -329,7 +339,7 @@ export class App implements BoardHost {
     const cameraMoved = this.camera.tick(now);
     const animating = this.renderer.animating(now);
     // One extra frame after effects finish, so their last trace is cleared.
-    if (this.runner.playing || this.dirty || cameraMoved || animating || this.wasAnimating) {
+    if (this.runner.playing || stepping || this.dirty || cameraMoved || animating || this.wasAnimating) {
       this.renderer.draw(this.scene(), now);
       this.dirty = false;
     }
@@ -445,6 +455,9 @@ export class App implements BoardHost {
   }
 
   reset(): void {
+    // A finished demo stays finished, so Reset gives a clean board to try
+    // things on (Replay demo plays it again); a demo still playing restarts.
+    if (!this.runner.demoLive) this.runner.stopDemo();
     this.runner.reset();
     this.renderer.clearEffects();
     this.transport.update();
@@ -849,10 +862,24 @@ export class App implements BoardHost {
     } else {
       const b = networkBounds(net);
       const bounds = { minX: b.minX - 0.5, minY: b.minY - 0.5, maxX: b.maxX + 0.5, maxY: b.maxY + 0.5 };
-      view = bestFit(bounds, width, height, insetOptions(this.measureChrome()), 64);
+      // Phones frame wide networks at a readable size (labels need ~14 px
+      // per cell) around the demo's keys, rather than shrinking them to fit.
+      const small = width <= 760 || height <= 500;
+      view = readableFit(bounds, width, height, insetOptions(this.measureChrome()), small ? READABLE_SCALE : 0, small ? this.demoFocus() : undefined, 64);
     }
     this.camera.animateTo(view, animate && !prefersReducedMotion() ? 320 : 0);
     this.invalidate();
+  }
+
+  /** The middle of the neurons the current example's demo presses, if any. */
+  private demoFocus(): { x: number; y: number } | undefined {
+    const ids = new Set((this.currentExample?.demo ?? []).flatMap((s) => (s.neuron ? [s.neuron] : [])));
+    const cells = this.store.network.neurons.filter((n) => ids.has(n.id));
+    if (!cells.length) return undefined;
+    return {
+      x: cells.reduce((sum, n) => sum + n.x + 0.5, 0) / cells.length,
+      y: cells.reduce((sum, n) => sum + n.y + 0.5, 0) / cells.length,
+    };
   }
 
   /**
@@ -1034,6 +1061,7 @@ export class App implements BoardHost {
     }
     try {
       const network = await decodeShareCode(request.code);
+      this.linkNetwork = network;
       this.store.replace(network, { title: 'Shared network' }, 'Open shared link');
       this.zoomToFit();
       this.toasts.show('Opened a shared network');
@@ -1052,7 +1080,9 @@ export class App implements BoardHost {
   private saveNow(): void {
     clearTimeout(this.autosaveTimer);
     this.savePending = false;
-    writeAutosave({ network: this.store.network, doc: this.store.doc });
+    const save = { network: this.store.network, doc: this.store.doc };
+    const untouched = save.network === this.linkNetwork || isPristineExample(save);
+    if (shouldAutosave(untouched, readAutosave())) writeAutosave(save);
   }
 
   /** Save an edit still waiting on the debounce when the tab is hidden or closed. */
@@ -1083,7 +1113,10 @@ export class App implements BoardHost {
       if (e.key === ' ') {
         if (onControl) return;
         e.preventDefault();
-        if (!e.repeat) this.input.setSpace(true);
+        if (!e.repeat) {
+          this.input.setSpace(true);
+          this.spaceArmed = true;
+        }
         return;
       }
       if (onControl && e.key === 'Enter') return;
@@ -1115,7 +1148,10 @@ export class App implements BoardHost {
     });
     window.addEventListener('keyup', (e) => {
       if (e.key === 'Shift') this.input.setShift(false);
-      if (e.key === ' ' && !isTyping(e.target) && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLSelectElement)) {
+      // Only a Space press that keydown claimed for the board toggles play;
+      // on checkboxes, switches, sliders, buttons or in dialogs it is theirs.
+      if (e.key === ' ' && this.spaceArmed) {
+        this.spaceArmed = false;
         e.preventDefault();
         if (!this.input.setSpace(false)) this.togglePlay();
       }
@@ -1123,6 +1159,7 @@ export class App implements BoardHost {
     window.addEventListener('blur', () => {
       this.input.setShift(false);
       this.input.setSpace(false);
+      this.spaceArmed = false;
     });
     // The board's focus ring is for keyboard navigation only: show it when
     // the board was reached with Tab, not after clicking it and then using

@@ -58,6 +58,28 @@ describe('classic examples', () => {
   });
 });
 
+describe('stable loops tips', () => {
+  it('raising one threshold, or cutting one connection, stops a loop', () => {
+    const { network } = findExample('stable-loops')!;
+    const loops = new Map<number, string[]>();
+    for (const n of network.neurons) if (n.kind === 'normal') loops.set(n.threshold, [...(loops.get(n.threshold) ?? []), n.id]);
+    const activity = (net: typeof network, ids: string[]) => {
+      const sim = new Simulation(net);
+      sim.runSeconds(60);
+      const before = ids.map((id) => sim.state(id)!.fireCount);
+      sim.runSeconds(30);
+      return ids.reduce((sum, id, i) => sum + sim.state(id)!.fireCount - before[i]!, 0);
+    };
+    for (const ids of loops.values()) {
+      const withThreshold = (delta: number) => ({ ...network, neurons: network.neurons.map((n) => (n.id === ids[0] ? { ...n, threshold: Math.max(1, n.threshold + delta) } : n)) });
+      const cut = network.connections.find((c) => ids.includes(c.from) && ids.includes(c.to))!;
+      expect(activity(network, ids)).toBeGreaterThan(0);
+      expect(activity(withThreshold(1), ids)).toBe(0);
+      expect(activity({ ...network, connections: network.connections.filter((c) => c !== cut) }, ids)).toBe(0);
+    }
+  });
+});
+
 describe('demos', () => {
   it('only poke neurons that exist', () => {
     for (const example of EXAMPLES) {

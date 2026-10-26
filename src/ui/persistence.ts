@@ -3,6 +3,7 @@
 // failures simply mean "nothing saved".
 
 import { normalizeNetwork, type Network } from '../engine';
+import { findExample } from '../examples';
 
 const AUTOSAVE_KEY = 'neural-playground:autosave:v2';
 const SETTINGS_KEY = 'neural-playground:settings:v2';
@@ -58,6 +59,30 @@ export function readAutosave(storage: Storage | undefined = safeStorage()): Auto
   } catch {
     return null;
   }
+}
+
+/** Same neurons, connections and texts, regardless of key order. */
+export function sameNetwork(a: Network, b: Network): boolean {
+  try {
+    return JSON.stringify(normalizeNetwork(a)) === JSON.stringify(normalizeNetwork(b));
+  } catch {
+    return false;
+  }
+}
+
+/** True when a save is a built-in example exactly as shipped: none of the user's work is in it. */
+export function isPristineExample(save: Autosave): boolean {
+  const example = save.doc.exampleId ? findExample(save.doc.exampleId) : undefined;
+  return example !== undefined && sameNetwork(save.network, example.network);
+}
+
+/**
+ * Whether to write an autosave. The slot holds the user's own work, so an
+ * untouched example or shared link (nothing the user made) may only replace
+ * an empty slot or another untouched example, never their own network.
+ */
+export function shouldAutosave(untouched: boolean, existing: Autosave | null): boolean {
+  return !untouched || existing === null || isPristineExample(existing);
 }
 
 export function writeAutosave(save: Autosave, storage: Storage | undefined = safeStorage()): void {

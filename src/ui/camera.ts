@@ -165,3 +165,40 @@ export function bestFit(bounds: Bounds, width: number, height: number, options: 
   }
   return best ?? fitView(bounds, width, height, 0, maxScale);
 }
+
+/**
+ * Like bestFit, but never below `minScale`. On a small screen a whole wide
+ * network would be too small to read, so frame part of it at a readable size
+ * instead: around `focus` if given (e.g. the keys a demo presses), otherwise
+ * from its top-left corner, keeping the view on the content where possible.
+ */
+export function readableFit(
+  bounds: Bounds,
+  width: number,
+  height: number,
+  options: readonly Insets[],
+  minScale: number,
+  focus?: { x: number; y: number },
+  maxScale = 56,
+): View {
+  let best: { view: View; insets: Insets } | null = null;
+  for (const insets of options) {
+    const view = fitViewIn(bounds, width, height, insets, maxScale);
+    if (!best || view.scale > best.view.scale * 1.02) best = { view, insets };
+  }
+  if (!best) return fitView(bounds, width, height, 0, maxScale);
+  if (best.view.scale >= minScale) return best.view;
+
+  const { insets } = best;
+  const scale = clampScale(minScale);
+  const freeW = Math.max(40, width - insets.left - insets.right);
+  const freeH = Math.max(40, height - insets.top - insets.bottom);
+  // Centre on `want`, unless the content fits on that axis, and never so far
+  // that empty space shows beyond the content's edge.
+  const axis = (lo: number, hi: number, avail: number, want: number) =>
+    hi - lo <= avail ? (lo + hi) / 2 : Math.min(hi - avail / 2, Math.max(lo + avail / 2, want));
+  const cx = axis(bounds.minX, bounds.maxX, freeW / scale, focus?.x ?? bounds.minX);
+  const cy = axis(bounds.minY, bounds.maxY, freeH / scale, focus?.y ?? bounds.minY);
+  return { x: cx - (insets.left + freeW / 2) / scale, y: cy - (insets.top + freeH / 2) / scale, scale };
+}
+
