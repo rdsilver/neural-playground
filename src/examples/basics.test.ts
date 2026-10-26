@@ -200,7 +200,7 @@ describe('hello, neurons', () => {
 
   it('⑥ the Random neuron sends every pulse one way only, about half each way', () => {
     const sim = new Simulation(net);
-    const count = (ids: readonly string[]) => 10 * sim.charge(ids[0]!) + sim.charge(ids[1]!);
+    const count = (ids: readonly string[]) => ids.reduce((n, id) => 10 * n + sim.charge(id), 0);
     const events = sim.runSeconds(90);
     const flips = fired(events, HELLO.coin).length;
     expect(flips).toBe(fired(events, HELLO.coinTimer).length - 1); // two a second; the last is still on its way
@@ -213,6 +213,30 @@ describe('hello, neurons', () => {
     expect(heads + tails).toBe(flips);
     expect(heads / flips).toBeGreaterThan(0.4);
     expect(heads / flips).toBeLessThan(0.6);
+  });
+
+  it('⑥ the coin counters have room for a long visit: no wrap round in 10 minutes', () => {
+    const sim = new Simulation(net);
+    const count = (ids: readonly string[]) => ids.reduce((n, id) => 10 * n + sim.charge(id), 0);
+    const flips = fired(sim.runSeconds(600), HELLO.coin).length;
+    sim.load({ ...net, connections: net.connections.filter((c) => c.from !== HELLO.coinTimer) });
+    sim.runSeconds(3);
+    // Over 500 a side, and nothing lost: a two-digit counter would have wrapped.
+    expect(count(HELLO.heads) + count(HELLO.tails)).toBe(flips);
+    expect(Math.min(count(HELLO.heads), count(HELLO.tails))).toBeGreaterThan(500);
+  });
+
+  it('⑤ clicking ▶ again mid-tune sends a second run of notes close behind the first', () => {
+    const sim = new Simulation(net);
+    sim.stimulate(HELLO.play);
+    sim.run(40);
+    sim.stimulate(HELLO.play);
+    const notes = sim.run(400).filter((e) => e.kind === 'note');
+    expect(notes).toHaveLength(8);
+    for (const midi of HELLO_ARPEGGIO) {
+      const ticks = notes.filter((e) => e.note === midi).map((e) => e.tick);
+      expect(ticks[1]! - ticks[0]!, `note ${midi}`).toBe(40); // each note plays twice, 40 ticks apart
+    }
   });
 
   it('runs on its own without touching the click-me circuits', () => {
@@ -239,6 +263,39 @@ describe('hello, neurons', () => {
     expect(sim.charge(HELLO.fires)).toBe(1);
     // the demo leaves the click-me circuits for the visitor
     expect(new Set(hello.demo!.map((s) => s.neuron))).toEqual(new Set([HELLO.clickMe]));
+  });
+
+  it('after the demo, six more clicks (on consecutive ticks) add 2 to the Digit, as tryThis says', () => {
+    const sim = new Simulation(net);
+    scheduleDemo(sim, hello.demo!);
+    sim.runSeconds(6);
+    expect(sim.charge(HELLO.fires)).toBe(1);
+    for (let i = 0; i < 6; i++) {
+      sim.stimulate(HELLO.clickMe);
+      sim.step();
+    }
+    sim.runSeconds(2);
+    expect(sim.charge(HELLO.fires)).toBe(3);
+    expect(sim.charge(HELLO.clickMe)).toBe(0);
+  });
+
+  it('demo replays identically after a reset, even after the visitor has clicked around', () => {
+    const sim = new Simulation(net);
+    const trace = () => {
+      scheduleDemo(sim, hello.demo!);
+      const out: string[] = [];
+      for (let i = 0; i < 12; i++) {
+        sim.runSeconds(0.5);
+        out.push(`${sim.charge(HELLO.clickMe)}/${sim.charge(HELLO.fires)}`);
+      }
+      return out;
+    };
+    const first = trace();
+    for (const id of [HELLO.clickMe, HELLO.go, HELLO.minus, HELLO.play, HELLO.clickMe]) sim.stimulate(id);
+    sim.runSeconds(3);
+    sim.reset();
+    expect(trace()).toEqual(first);
+    expect(first.at(-1)).toBe('0/1');
   });
 
   it('keeps its six circuits separate: no connection crosses between panels', () => {
@@ -485,6 +542,54 @@ describe('flip-flop memory', () => {
     }
   });
 
+  it('triples of presses, from power-on or later, at every gap on a grid: always clean', () => {
+    for (const start of [0, 45, 120]) {
+      for (const k1 of [F.set, F.reset]) for (const k2 of [F.set, F.reset]) for (const k3 of [F.set, F.reset]) {
+        for (let g1 = 0; g1 <= 100; g1 += 3) {
+          for (let g2 = 0; g2 <= 100; g2 += 4) {
+            const sim = new Simulation(net);
+            sim.run(start);
+            sim.stimulate(k1);
+            watch(sim, g1);
+            sim.stimulate(k2);
+            watch(sim, g2);
+            sim.stimulate(k3);
+            watch(sim, 420);
+            bit(sim);
+          }
+        }
+      }
+    }
+  });
+
+  it('presses made while the demo plays still leave a clean 0 or 1', () => {
+    const rand = mulberry32(5);
+    for (let run = 0; run < 60; run++) {
+      const sim = new Simulation(net);
+      scheduleDemo(sim, flipFlop.demo!);
+      for (let t = 0; t < 36 * TICKS_PER_SECOND; t++) {
+        if (rand() < 0.01) sim.stimulate(rand() < 0.5 ? F.set : F.reset);
+        watch(sim, 1);
+      }
+      watch(sim, 420);
+      bit(sim);
+    }
+  });
+
+  it('the left loop neuron, clicked by hand, shows on the display and cannot be cleared', () => {
+    const sim = memory(0);
+    sim.stimulate(F.loop[0]);
+    sim.runSeconds(1);
+    for (let i = 0; i < 6 * TICKS_PER_SECOND; i++) {
+      sim.step();
+      expect(sim.charge(F.bit)).toBe(1);
+    }
+    sim.stimulate(F.reset); // the gates say 0 already: ignored
+    sim.runSeconds(6);
+    expect(loopPulses(sim)).toBe(1);
+    expect(sim.charge(F.bit)).toBe(1);
+  });
+
   it('demo: SET, SET, RST, RST, SET with the display following along', () => {
     const sim = new Simulation(net);
     scheduleDemo(sim, flipFlop.demo!);
@@ -497,6 +602,45 @@ describe('flip-flop memory', () => {
     });
     expect(sim.state(F.setGate)!.fireCount).toBe(2);
     expect(sim.state(F.resetGate)!.fireCount).toBe(1);
+  });
+
+  it('demo: each change shows on the display well before the next caption', () => {
+    // At least 3.5 simulated seconds (1.75 s at the suggested 2x) to see it.
+    const sim = new Simulation(net);
+    scheduleDemo(sim, flipFlop.demo!);
+    const changes: number[] = [];
+    let shown = sim.charge(F.bit);
+    for (let t = 0; t < 36 * TICKS_PER_SECOND; t++) {
+      sim.step();
+      if (sim.charge(F.bit) !== shown) changes.push(sim.tick / TICKS_PER_SECOND);
+      shown = sim.charge(F.bit);
+    }
+    const steps = flipFlop.demo!;
+    expect(changes).toHaveLength(3); // SET, RST, SET; the repeats change nothing
+    for (const [i, at] of [[0, changes[0]!], [2, changes[1]!], [4, changes[2]!]] as const) {
+      expect(at).toBeGreaterThan(steps[i]!.at);
+      const next = steps[i + 1]?.at ?? Infinity;
+      expect(next - at, `step ${i}`).toBeGreaterThanOrEqual(3.5);
+    }
+  });
+
+  it('demo replays identically after a reset', () => {
+    const sim = new Simulation(net);
+    const trace = () => {
+      scheduleDemo(sim, flipFlop.demo!);
+      const out: number[] = [];
+      for (let i = 0; i < 36; i++) {
+        sim.runSeconds(1);
+        out.push(sim.charge(F.bit));
+      }
+      return out.join('');
+    };
+    const first = trace();
+    sim.stimulate(F.reset);
+    sim.stimulate(F.loop[0]);
+    sim.runSeconds(2);
+    sim.reset();
+    expect(trace()).toBe(first);
   });
 });
 

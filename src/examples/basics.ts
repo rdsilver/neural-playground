@@ -25,8 +25,8 @@ export const HELLO = {
   notes: ['note-c4', 'note-e4', 'note-g4', 'note-c5'],
   coinTimer: 'coin-timer',
   coin: 'coin',
-  heads: ['heads-tens', 'heads-ones'],
-  tails: ['tails-tens', 'tails-ones'],
+  heads: ['heads-hundreds', 'heads-tens', 'heads-ones'],
+  tails: ['tails-hundreds', 'tails-tens', 'tails-ones'],
 } as const;
 
 /** MIDI notes of the arpeggio in step 5: C4 E4 G4 C5. */
@@ -35,7 +35,7 @@ export const HELLO_ARPEGGIO = [60, 64, 67, 72] as const;
 /** Write a numbered step heading and its one- or two-line hint. */
 function step(b: NetworkBuilder, x: number, y: number, n: number, title: string, hint: string): void {
   b.text(x, y, `${'①②③④⑤⑥'[n - 1]} ${title}`, { size: 0.62, tone: 'accent' });
-  b.text(x, y + 0.95, hint, { size: 0.46, tone: 'muted' });
+  b.text(x, y + 0.95, hint, { size: 0.5, tone: 'muted' });
 }
 
 function helloNeurons(): Network {
@@ -102,18 +102,25 @@ function helloNeurons(): Network {
   }
 
   // 6. Random: a Timer drops a pulse into a Random neuron twice a second and it
-  //    sends each one down just one of its two connections: a coin flip.
+  //    sends each one down just one of its two connections: a coin flip. The
+  //    counters have three digits, so neither side wraps round to 000 (and
+  //    seems to fall behind) during a long visit.
   {
     const x = col[2]!, y = row[1]!;
     step(b, x, y, 6, 'Random picks one path', 'Each pulse goes up or down, chosen at random.\nWhich side is winning?');
-    const [ht, ho] = [b.digit(x + 3, y + 3, 10, { id: HELLO.heads[0] }), b.digit(x + 4, y + 3, 10, { id: HELLO.heads[1] })];
-    const [tt, to] = [b.digit(x + 3, y + 7, 10, { id: HELLO.tails[0] }), b.digit(x + 4, y + 7, 10, { id: HELLO.tails[1] })];
-    b.connect(ho, ht).connect(to, tt);
+    /** Hundreds, tens, ones left to right, carrying leftwards; returns the ones Digit. */
+    const counter = (ids: readonly string[], cy: number): string => {
+      ids.forEach((id, i) => b.digit(x + 2 + i, cy, 10, { id }));
+      b.chain([...ids].reverse());
+      return ids[ids.length - 1]!;
+    };
+    const heads = counter(HELLO.heads, y + 3);
+    const tails = counter(HELLO.tails, y + 7);
     const coin = b.random(x + 8, y + 5, 1, { id: HELLO.coin });
     const timer = b.timer(x + 11, y + 5, { id: HELLO.coinTimer, interval: 0.5 });
-    b.connect(timer, coin).connect(coin, [ho, to]);
-    b.text(x + 2.6, y + 3.2, 'heads', { size: 0.46, tone: 'muted', align: 'right' });
-    b.text(x + 2.6, y + 7.2, 'tails', { size: 0.46, tone: 'muted', align: 'right' });
+    b.connect(timer, coin).connect(coin, [heads, tails]);
+    b.text(x + 1.6, y + 3.2, 'heads', { size: 0.46, tone: 'muted', align: 'right' });
+    b.text(x + 1.6, y + 7.2, 'tails', { size: 0.46, tone: 'muted', align: 'right' });
   }
 
   b.text(0, 22, 'Ready for more? The Calculators and Patterns examples build bigger machines from these same parts.', { size: 0.5 });
@@ -323,10 +330,10 @@ export const BASICS_EXAMPLES: Example[] = [
       '5. A Note plays a note when it fires, then passes the pulse on.\n\n' +
       '6. A Random neuron sends each pulse down just one of its connections, picked at random.',
     tryThis: [
-      'Click the first neuron six times quickly: its Digit counts 2, one for every third click.',
+      'Click the first neuron six more times, as fast as you like: its Digit goes up by 2, one for every third click.',
       'Click go twice in a row: two pulses travel the line, one behind the other.',
       'Click −1 a few times: the charge goes below zero, and +1 brings it back.',
-      'Click ▶ again while the notes are still playing.',
+      'Click ▶ again while the notes are still playing: a second run of notes follows close behind the first.',
     ],
     network: helloNeurons(),
     demo: [
@@ -344,21 +351,23 @@ export const BASICS_EXAMPLES: Example[] = [
       'The memory is the loop on the right: two neurons with threshold 1, connected both ways. A pulse inside it is passed back and forth forever. Pulse bouncing = 1, loop empty = 0. The Digit above reads the loop: it gains 1 each time the left loop neuron fires and loses 1 (through the Inhibitor) each time the right one fires, so it holds a steady 1 while the pulse bounces.\n\n' +
       'SET starts the loop with a +1; RST stops it with an Inhibitor, whose −1 swallows the bouncing pulse. Wired straight to the loop, that breaks easily: press SET twice and two pulses bounce, so one RST is not enough; press RST twice and the spare −1 stays in the loop and swallows your next SET.\n\n' +
       'The two gates in the middle prevent that. Between them they hold exactly one "hole" of −1 charge: on the RST gate while the bit is 0, on the SET gate while it is 1. Each key press reaches its gate as a +1 and a −1 in the same tick (the square splits the press in two, and both halves travel 4 cells). If the gate holds the hole, the +1 fills it and the −1 digs it again: nothing happens, however often you press. If the gate is open, the +1 fires it, which starts or stops the loop and sends +1 across to fill the other gate\'s hole, and the −1 leaves the hole behind. So the gates take turns, and the loop never gets a second pulse or leftover charge.\n\n' +
-      'One catch, as with real flip-flops: news of a change takes half a second to cross between the gates, so an opposite key pressed within that half second is ignored. At power-on a one-shot Timer digs the very first hole, so the memory starts at 0.',
+      'One catch, as with real flip-flops: news of a change takes half a second of simulated time to cross between the gates, so an opposite key pressed within that half second is ignored. Nothing is left half-done: press it again and it works. At power-on a one-shot Timer digs the very first hole, so the memory starts at 0.',
     tryThis: [
       'Press SET again and again: there is still only one pulse, and the bit stays 1.',
       'Press RST twice, then SET: it works first time, because no charge was left behind.',
-      'Press SET and then RST straight away: the RST is ignored. Wait a moment and press it again.',
-      'Click a loop neuron to sneak in a second pulse behind the gates\' backs: now the keys can never empty the loop.',
+      'Slow the simulation down and press a key: the press splits around its square and reaches the gate as a +1 and a −1 at the same moment.',
+      'Click the left loop neuron to sneak in a second pulse behind the gates\' backs: now the keys can never empty the loop.',
     ],
     network: flipFlop(),
     speed: 2,
     demo: [
+      // 7 s apart (3.5 s at the suggested 2x): time to read the caption, watch
+      // the press travel, and see the bit change before the next step.
       { at: 1.5, neuron: FLIP_FLOP.set, caption: 'SET: a pulse starts bouncing in the loop. The bit is 1.' },
-      { at: 6.5, neuron: FLIP_FLOP.set, caption: 'SET again: ignored. Still exactly one pulse.' },
-      { at: 11.5, neuron: FLIP_FLOP.reset, caption: 'RST: an Inhibitor catches the pulse. The bit is 0.' },
-      { at: 16.5, neuron: FLIP_FLOP.reset, caption: 'RST again: ignored, and no −1 is left behind…' },
-      { at: 21.5, neuron: FLIP_FLOP.set, caption: '…so the next SET works first time.' },
+      { at: 8.5, neuron: FLIP_FLOP.set, caption: 'SET again: ignored. Still exactly one pulse.' },
+      { at: 15.5, neuron: FLIP_FLOP.reset, caption: 'RST: an Inhibitor catches the pulse. The bit is 0.' },
+      { at: 22.5, neuron: FLIP_FLOP.reset, caption: 'RST again: ignored, and no −1 is left behind…' },
+      { at: 29.5, neuron: FLIP_FLOP.set, caption: '…so the next SET works first time.' },
     ],
   },
   {
@@ -368,7 +377,7 @@ export const BASICS_EXAMPLES: Example[] = [
     summary: 'Random pegs sort 256 balls into a bell curve.',
     description:
       `A timer drops ${GALTON_BALLS} balls, four a second, onto ${GALTON_ROWS} rows of pegs. Every peg is a Random neuron that sends each ball down to the left or to the right, as if it flipped a coin. A ball's bin is decided by how many times it went right.\n\n` +
-      'There are far more ways to reach the middle than the edges: of the 256 possible left/right paths, 70 end in the centre bin and only one in each corner. So the counts pile up into a bell shape, and on average each bin ends near its number from row 8 of Pascal\'s triangle: 1, 8, 28, 56, 70, 56, 28, 8, 1. Luck decides the exact counts, never the shape.\n\n' +
+      'There are far more ways to reach the middle than the edges: of the 256 possible left/right paths, 70 end in the centre bin and only one in each corner. So the counts pile up into a bell shape, and on average each bin ends near its number from row 8 of Pascal\'s triangle: 1, 8, 28, 56, 70, 56, 28, 8, 1. Luck decides the exact counts, but the number of paths decides the overall shape.\n\n' +
       'The bins are two-digit counters (the ones Digit carries into the tens), and each bin mouth is a Note from a pentatonic scale.',
     tryThis: [
       'Turn sound on: the middle notes come up far more often than the lowest and highest.',
