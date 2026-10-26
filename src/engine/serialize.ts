@@ -44,7 +44,7 @@ export function normalizeNetwork(input: unknown): Network {
       y,
       threshold: finite(raw.threshold) ? Math.max(1, Math.round(raw.threshold)) : defaults.threshold,
     };
-    if (typeof raw.label === 'string' && raw.label.trim()) spec.label = raw.label.slice(0, 12);
+    if (typeof raw.label === 'string' && raw.label.trim()) spec.label = raw.label.trim().slice(0, 12);
     if (kind === 'timer') {
       spec.interval = finite(raw.interval) && raw.interval > 0 ? raw.interval : defaults.interval;
       spec.times = finite(raw.times) && raw.times >= 0 ? Math.round(raw.times) : -1;

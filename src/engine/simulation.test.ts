@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NetworkBuilder } from './builder';
 import { Simulation, TICKS_PER_CELL, TICKS_PER_SECOND, travelTicks } from './simulation';
+import type { ConnectionSpec, NeuronSpec } from './types';
 
 describe('Simulation', () => {
   it('accumulates charge and fires at the threshold, resetting to zero', () => {
@@ -196,4 +197,57 @@ describe('Simulation', () => {
     sim.reset();
     expect(sim.pendingStimuli()).toHaveLength(0);
   });
+
+  it('nextEventTick finds the soonest stimulus, arrival or timer fire', () => {
+    const b = new NetworkBuilder();
+    const a = b.normal(0, 0, 1, { id: 'a' });
+    const c = b.normal(2, 0, 5, { id: 'c' });
+    b.connect(a, c);
+    const t = b.timer(0, 5, { id: 't', interval: 1, times: 1 });
+    const sim = new Simulation(b.build());
+    expect(sim.nextEventTick()).toBe(1);
+    sim.step();
+    expect(sim.state(t)!.timerFires).toBe(1);
+    expect(sim.nextEventTick()).toBeUndefined();
+    sim.stimulate(a);
+    expect(sim.nextEventTick()).toBe(1 + 30);
+    sim.schedule(10, c);
+    expect(sim.nextEventTick()).toBe(10);
+  });
+
+  it('load() forgets stimuli scheduled for deleted neurons', () => {
+    const b = new NetworkBuilder();
+    b.normal(0, 0, 1, { id: 'a' });
+    b.normal(1, 0, 1, { id: 'b' });
+    const net = b.build();
+    const sim = new Simulation(net);
+    sim.schedule(5, 'a');
+    sim.schedule(6, 'b');
+    sim.load({ ...net, neurons: net.neurons.filter((n) => n.id !== 'a') });
+    expect(sim.pendingStimuli().map((s) => s.neuron)).toEqual(['b']);
+  });
+
+  it('run() copes with more fires in one tick than fit in a function call', () => {
+    // 200k neurons on a thin ring around a hub, all exactly 15R ticks away, so
+    // every one of them fires on the same tick (a spread push would throw).
+    const R = 480_000;
+    const neurons: NeuronSpec[] = [{ id: 'hub', kind: 'normal', x: 0, y: 0, threshold: 1 }];
+    const connections: ConnectionSpec[] = [];
+    const inner = (R - 1 / 15) ** 2;
+    for (let x = -R; x <= R && neurons.length <= 200_000; x++) {
+      const yMax = Math.floor(Math.sqrt(R * R - x * x));
+      for (let y = yMax; y >= 0 && x * x + y * y > inner; y--) {
+        for (const cy of y === 0 ? [0] : [y, -y]) {
+          const id = `r${neurons.length}`;
+          neurons.push({ id, kind: 'normal', x, y: cy, threshold: 1 });
+          connections.push({ from: 'hub', to: id });
+        }
+      }
+    }
+    const sim = new Simulation({ version: 2, neurons, connections });
+    sim.stimulate('hub');
+    const events = sim.run(15 * R);
+    expect(events.length).toBe(neurons.length - 1);
+  });
 });
+

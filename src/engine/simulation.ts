@@ -37,7 +37,7 @@ export interface NeuronState {
   fireCount: number;
   /** Timers only: how many times it has fired since the last reset. */
   timerFires: number;
-  /** Timers only: tick at which it fires next. */
+  /** Timers only: tick at which it fires next (unused for other kinds). */
   nextTimerTick: number;
 }
 
@@ -134,6 +134,7 @@ export class Simulation {
     for (const n of network.neurons) states.set(n.id, this.states.get(n.id) ?? freshState());
     this.states = states;
     this.queue.retain((p) => seen.has(`${p.from}\u0000${p.to}`));
+    this.scheduled = this.scheduled.filter((s) => this.specs.has(s.neuron));
   }
 
   /** Clear all charge, pulses and timers, and rewind the clock and RNG. */
@@ -236,13 +237,30 @@ export class Simulation {
   /** Advance several ticks, returning every fire along the way. */
   run(ticks: number): FireEvent[] {
     const events: FireEvent[] = [];
-    for (let i = 0; i < ticks; i++) events.push(...this.step());
+    for (let i = 0; i < ticks; i++) for (const event of this.step()) events.push(event);
     return events;
   }
 
   /** Advance by a number of simulated seconds. */
   runSeconds(seconds: number): FireEvent[] {
     return this.run(Math.round(seconds * TICKS_PER_SECOND));
+  }
+
+  /**
+   * The next tick on which something will happen (a stimulus, a pulse
+   * arrival or a timer fire), or undefined if nothing ever will. Handy for
+   * "step to the next event" controls.
+   */
+  nextEventTick(): number | undefined {
+    let next = Infinity;
+    if (this.queue.items.length) next = this.queue.items[0]!.arrivalTick;
+    if (this.scheduled.length) next = Math.min(next, this.scheduled[0]!.tick);
+    for (const timer of this.timers) {
+      const state = this.states.get(timer.id)!;
+      const times = timer.times ?? -1;
+      if (times < 0 || state.timerFires < times) next = Math.min(next, Math.max(this.currentTick + 1, state.nextTimerTick));
+    }
+    return next === Infinity ? undefined : next;
   }
 
   /** True when nothing is in flight and no timer will fire again. */
