@@ -157,19 +157,24 @@ function polyrhythm(): Network {
   b.text(0.5, 6.15, 'clock', { size: 0.42, align: 'center', tone: 'muted' });
   b.text(0.5, 6.7, 'every 0.2 s', { size: 0.38, align: 'center', tone: 'muted' });
 
+  // Each beat counter sits right next to its note, so it shows the new beat
+  // 15 ticks after the note sounds, well before the next beat (36 or 48 ticks
+  // later). Three cells away (45 ticks) the high counter would still show the
+  // previous beat when the next one sounded.
+
   // Upper voice: every 3rd tick, 4 beats a bar, high note.
   const div3 = b.digit(3, 3, 3, { id: 'div3', label: '÷3' });
   const high = b.note(6, 3, G4, 1, { id: 'high' });
-  const beats4 = b.digit(9, 3, 4, { id: 'beat-of-4', label: 'beat' });
+  const beats4 = b.digit(7, 3, 4, { id: 'beat-of-4', label: 'beat' });
   b.chain([clock, div3, high, beats4]);
-  b.text(10.4, 3.2, '4 beats a bar', { size: 0.45, tone: 'accent' });
+  b.text(8.4, 3.2, '4 beats a bar', { size: 0.45, tone: 'accent' });
 
   // Lower voice: every 4th tick, 3 beats a bar, low note.
   const div4 = b.digit(3, 7, 4, { id: 'div4', label: '÷4' });
   const low = b.note(6, 7, C3, 1, { id: 'low' });
-  const beats3 = b.digit(9, 7, 3, { id: 'beat-of-3', label: 'beat' });
+  const beats3 = b.digit(7, 7, 3, { id: 'beat-of-3', label: 'beat' });
   b.chain([clock, div4, low, beats3]);
-  b.text(10.4, 7.2, '3 beats a bar', { size: 0.45, tone: 'accent' });
+  b.text(8.4, 7.2, '3 beats a bar', { size: 0.45, tone: 'accent' });
 
   // A picture of one bar: twelve clock ticks, and where each voice plays.
   const gridY = 10;
@@ -238,20 +243,22 @@ export const TIME_MUSIC_EXAMPLES: Example[] = [
     category: 'Counting',
     summary: 'Minutes and seconds from four Digit neurons in bases 10 and 6.',
     description:
-      'A timer sends one pulse a second into the seconds digit. Each Digit neuron\'s threshold is its base: the ones digits count to 10 and the tens digits only to 6, so after 59 seconds comes a new minute, and after 59:59 the clock starts again at 00:00. When a digit reaches its base it resets to 0 and fires a carry pulse to the left. Even the colon is a neuron: it passes the carry from the seconds to the minutes.\n\n' +
-      'Carries take time to travel, a quarter of a second per cell. So when 00:59 becomes 01:00 the digits change one after another, right to left, like the wheels of an odometer: for a moment the clock reads 00:50, then 00:00, then 01:00. Every hop is a single cell, so the ripple is over within the second. At 09:59 and 59:59 it has one more digit to reach and takes the whole second, so the display catches up just as the next second arrives.',
+      'A timer sends one pulse a second into the seconds digit. Each Digit neuron\'s threshold is its base: the ones digits count to 10 and the tens digits only to 6, so after 59 seconds comes a new minute, and after 59 minutes the minutes wrap round to 00. When a digit reaches its base it resets to 0 and fires a carry pulse to the left. Even the colon is a neuron: it passes the carry from the seconds to the minutes.\n\n' +
+      'Carries take time to travel, a quarter of a second per cell. So when 00:59 becomes 01:00 the digits change one after another, right to left, like the wheels of an odometer: for a moment the clock reads 00:50, then 00:00, then 01:00. Every hop is a single cell, so the ripple is over within the second. At 09:59, 19:59 and so on the carry has one more digit to reach and takes the whole second, so the display skips 10:00 and catches up just as 10:01 arrives.',
     tryThis: [
       'Set the speed to 16× and watch the minutes roll over.',
-      'Click a digit to set the clock: a click counts like a pulse from the timer, so it carries too. The colon adds a minute.',
+      'Click a digit to set the clock: a click counts just like an incoming pulse, so it carries too. The colon adds a minute.',
       'Slow down to ¼× just before a minute ends to watch the carry ripple from right to left.',
       'Connect the tens-of-seconds digit to a new Note neuron: that digit fires once a minute, so the clock chimes on the minute.',
     ],
     network: digitalClock(),
     demo: [
-      ...[0.5, 0.65, 0.8, 0.95, 1.1].map((at, i) => ({
+      // All five clicks land before the first second does (tick 61), so the
+      // display really reads 00:10, 00:20, ... 00:50 and then 00:51.
+      ...[0.2, 0.35, 0.5, 0.65, 0.8].map((at, i) => ({
         at,
         neuron: 'sec-tens',
-        ...(i === 0 ? { caption: 'Clicking the tens of seconds five times sets the clock to 00:50…' } : {}),
+        ...(i === 0 ? { caption: 'Five clicks on the tens of seconds set the clock to 00:50…' } : {}),
       })),
       ...captions('clock', [[9.4, '…so the minute turns soon: watch the carry ripple right to left.']]),
     ],
@@ -276,7 +283,7 @@ export const TIME_MUSIC_EXAMPLES: Example[] = [
       [3, 'Voice 2 comes in as voice 1 turns the first corner.'],
       [6, 'Voice 3 joins: three lines of the song at once.'],
       [9, 'Voice 4: every side of the square is singing.'],
-      [12.8, 'Voice 1 has finished; the others follow it home.'],
+      [11.5, 'Voice 1 has finished; the others follow it home.'],
     ]),
   },
   {
@@ -285,7 +292,7 @@ export const TIME_MUSIC_EXAMPLES: Example[] = [
     category: 'Music',
     summary: 'One clock divided by 3 and by 4 plays two rhythms at once.',
     description:
-      'The timer ticks five times a second. Two Digit neurons divide it: one has threshold 3 and fires on every third tick, the other has threshold 4 and fires on every fourth. Each one fires a Note neuron, and each note feeds a counter that shows which beat of the bar it is on.\n\n' +
+      'The timer ticks five times a second. Two Digit neurons divide it: one has threshold 3 and fires on every third tick, the other has threshold 4 and fires on every fourth. Each one fires a Note neuron, and each note feeds a counter that shows which beat of the bar it is on (0 is the downbeat).\n\n' +
       'Twelve ticks make a bar of 2.4 seconds: in that time the high note plays 4 evenly spaced beats and the low note 3, as the dots under the circuit show. The paths from the clock to both notes are the same length, so once a bar the two land on exactly the same tick and both beat counters return to 0 together.',
     tryThis: [
       'Turn on sound and tap along with either voice; then try to hear both at once.',
@@ -304,7 +311,7 @@ export const TIME_MUSIC_EXAMPLES: Example[] = [
       'A Random neuron fires exactly one pulse for each pulse it receives, so a walker never dies out or multiplies: it is one pulse that wanders forever. The timer starts two of them, a little apart, for a gentle duet. Every step takes the same time, so the walkers keep a steady beat.',
     tryThis: [
       'Turn on sound, then click any note to add another walker. Reset to start again with two.',
-      'Delete one Random neuron\'s connection to the note below it: walkers can still climb past that note but never come back down.',
+      'Delete the connection from one Random neuron to the lower of its two notes (the one on the left). Walkers can still climb past the note that feeds it, but can never get back below that note.',
       'Change the notes to a different scale, for example a minor pentatonic (C E♭ F G B♭).',
     ],
     network: wanderingMelody(),

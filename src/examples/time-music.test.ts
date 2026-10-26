@@ -249,7 +249,18 @@ describe('digital clock', () => {
   it('demo: five clicks set 00:50, and the minute turns over at ten seconds', () => {
     const sim = new Simulation(clock.network);
     scheduleDemo(sim, clock.demo!);
-    sim.run(5 * 60 + 50);
+    // The caption promises 00:50, so the display must really show it.
+    expect(readingsBetween(sim, 0, 130)).toEqual([
+      [0, '00:00'],
+      [12, '00:10'],
+      [21, '00:20'],
+      [30, '00:30'],
+      [39, '00:40'],
+      [48, '00:50'],
+      [61, '00:51'],
+      [121, '00:52'],
+    ]);
+    sim.run(5 * 60 + 50 - sim.tick);
     expect(reading(sim)).toBe('00:55');
     expect(readingsBetween(sim, 599, 662)).toEqual([
       [599, '00:59'],
@@ -258,6 +269,72 @@ describe('digital clock', () => {
       [646, '01:00'],
       [661, '01:01'],
     ]);
+    // The second caption appears shortly before that ripple.
+    const ripple = clock.demo!.find((s) => s.caption?.includes('ripple'))!;
+    expect(ripple.at * TICKS_PER_SECOND).toBeGreaterThan(450);
+    expect(ripple.at * TICKS_PER_SECOND).toBeLessThan(601);
+  });
+
+  it('demo: replays identically after a reset, and more clicks afterwards still add up', () => {
+    const sim = new Simulation(clock.network);
+    scheduleDemo(sim, clock.demo!);
+    const first = readingsBetween(sim, 0, 800);
+    sim.reset();
+    scheduleDemo(sim, clock.demo!);
+    expect(readingsBetween(sim, 0, 800)).toEqual(first);
+    // Hammer the colon and the minutes in the middle of the next minute ripple
+    // (second 70 lands at tick 4201 and reads 02:00 = 01:59 + 1).
+    sim.run(4205 - sim.tick);
+    for (let i = 0; i < 3; i++) sim.stimulate('colon');
+    sim.step();
+    for (let i = 0; i < 7; i++) sim.stimulate('min-ones');
+    sim.stimulate('min-tens');
+    sim.run(60 * 72 + 59 - sim.tick); // second 72 has landed and settled
+    expect(reading(sim)).toBe(mmss(72 + 50 + 3 * 60 + 7 * 60 + 600));
+  });
+
+  it('settles on the exact time whenever no carry is in flight, under random clicks', () => {
+    const ids = Object.keys(CLICK_SECONDS);
+    for (let seed = 1; seed <= 6; seed++) {
+      const rng = mulberry32(100 + seed);
+      const sim = new Simulation(clock.network);
+      let added = 0;
+      let checked = 0;
+      for (let t = 0; t < 20_000; t++) {
+        if (rng() < 0.08) {
+          const id = ids[Math.floor(rng() * ids.length)]!;
+          const count = 1 + Math.floor(rng() * 4);
+          for (let i = 0; i < count; i++) sim.stimulate(id);
+          added += count * CLICK_SECONDS[id]!;
+        }
+        sim.step();
+        // Only the timer's own pulse is travelling: every carry has landed.
+        if (sim.pulses().every((p) => p.from === 'clock')) {
+          const landed = sim.state('clock')!.fireCount - sim.pulses().length;
+          expect(reading(sim), `seed ${seed}, tick ${sim.tick}`).toBe(mmss(landed + added));
+          checked++;
+        }
+      }
+      expect(checked).toBeGreaterThan(5_000);
+    }
+  });
+
+  it('a click at any tick of a 10-minute rollover, on any digit or the colon, adds exactly its place value', () => {
+    // 09:58 by clicks at tick 0; second 2 (tick 121) starts the slowest
+    // ripple there is, 09:59 -> 10:00, which lands on tick 181.
+    for (const [id, worth] of Object.entries(CLICK_SECONDS)) {
+      for (let at = 100; at <= 200; at++) {
+        const sim = new Simulation(clock.network);
+        for (let i = 0; i < 9; i++) sim.stimulate('min-ones');
+        for (let i = 0; i < 5; i++) sim.stimulate('sec-tens');
+        for (let i = 0; i < 8; i++) sim.stimulate('sec-ones');
+        sim.run(at - sim.tick);
+        sim.stimulate(id);
+        sim.stimulate(id); // and a double click on the same tick
+        sim.run(60 * 6 + 59 - sim.tick);
+        expect(reading(sim), `${id} at tick ${at}`).toBe(mmss(598 + 6 + 2 * worth));
+      }
+    }
   });
 });
 
@@ -405,6 +482,42 @@ describe('row, row, row your boat', () => {
     expect(round.demo!.every((s) => s.neuron === 'voices' && s.caption)).toBe(true);
     expect(withDemo.run(60 * 25)).toEqual(plain.run(60 * 25));
   });
+
+  it('demo captions match the music: each voice enters as its caption appears', () => {
+    const sim = new Simulation(round.network);
+    const firsts = fires(sim.run(60 * 25), roundNoteId(0));
+    expect(firsts).toEqual([0, 1, 2, 3].map((v) => FIRST_NOTE_TICK + v * 180));
+    const [v1, v2, v3, v4, done] = round.demo!.map((s) => Math.round(s.at * TICKS_PER_SECOND));
+    // Each "voice n" caption shows up when the timer sends that voice off,
+    // before its first note.
+    [v1, v2, v3, v4].forEach((t, v) => {
+      expect(t!).toBeLessThanOrEqual(firsts[v]!);
+      expect(t!).toBeGreaterThan(firsts[v]! - 60);
+    });
+    // "Voice 1 has finished" comes after its last note, while voice 2 still sings.
+    const v1End = FIRST_NOTE_TICK + 42 * 15;
+    expect(done!).toBeGreaterThan(v1End);
+    expect(done!).toBeLessThan(v1End + 60);
+  });
+
+  it('replays identically after a reset, with clicks during the demo', () => {
+    const play = (sim: Simulation) => {
+      scheduleDemo(sim, round.demo!);
+      const events: FireEvent[] = [];
+      for (let t = 0; t < 60 * 30; t++) {
+        if (t === 200 || t === 201 || t === 590) events.push(...sim.stimulate(roundNoteId(0)));
+        if (t === 300) events.push(...sim.stimulate(roundNoteId(10))); // a voice from the middle of the tune
+        events.push(...sim.step());
+      }
+      return notesOf(events);
+    };
+    const sim = new Simulation(round.network);
+    const first = play(sim);
+    sim.reset();
+    expect(play(sim)).toEqual(first);
+    expect(first.length).toBe(4 * 27 + 3 * 27 + 17);
+    expect(sim.isIdle()).toBe(true);
+  });
 });
 
 // ---- Polyrhythm --------------------------------------------------------------
@@ -460,15 +573,24 @@ describe('polyrhythm', () => {
       expect(dividers.charge('div3'), `pulse ${k}`).toBe(k % 3);
       expect(dividers.charge('div4'), `pulse ${k}`).toBe(k % 4);
     }
-    // ...and the counters which beat of the bar each voice has reached.
+    // ...and the counters which beat of the bar each voice has reached. A
+    // counter is one cell after its note, so it shows a beat from 15 ticks
+    // after the note sounds until 15 ticks after the next clock pulse's
+    // turn: it never lags behind the music by a whole beat.
     const sim = new Simulation(poly.network);
-    const counterDelay = 45;
+    const counterDelay = 15;
+    sim.run(beatTick(1) + counterDelay - 1);
     for (let k = 1; k <= 120; k++) {
-      sim.run(beatTick(k) + counterDelay - sim.tick);
-      expect(sim.charge('beat-of-4'), `pulse ${k}`).toBe(Math.floor(k / 3) % 4);
-      expect(sim.charge('beat-of-3'), `pulse ${k}`).toBe(Math.floor(k / 4) % 3);
-      if (k % 12 === 0) expect([sim.charge('beat-of-4'), sim.charge('beat-of-3')]).toEqual([0, 0]);
+      for (let t = beatTick(k) + counterDelay; t < beatTick(k + 1) + counterDelay; t++) {
+        sim.step();
+        expect(sim.tick).toBe(t);
+        expect(sim.charge('beat-of-4'), `pulse ${k}, tick ${t}`).toBe(Math.floor(k / 3) % 4);
+        expect(sim.charge('beat-of-3'), `pulse ${k}, tick ${t}`).toBe(Math.floor(k / 4) % 3);
+      }
     }
+    const at = new Map(poly.network.neurons.map((n) => [n.id, n]));
+    expect(travelTicks(at.get('high')!, at.get('beat-of-4')!)).toBe(counterDelay);
+    expect(travelTicks(at.get('low')!, at.get('beat-of-3')!)).toBe(counterDelay);
   });
 
   it('after clicks on the dividers it is still 4 against 3, still meeting once a bar', () => {
@@ -494,6 +616,32 @@ describe('polyrhythm', () => {
       const together = high.filter((t) => low.includes(t));
       expect(together.length, `seed ${seed}`).toBe(5);
     }
+  });
+
+  it('clicks on the notes, the counters or the clock never move the rhythm, and a reset replays it exactly', () => {
+    const plain = new Simulation(poly.network);
+    const expected = plain.run(60 * 60).filter((e) => e.kind === 'note');
+    const sim = new Simulation(poly.network);
+    const rng = mulberry32(7);
+    const ids = ['high', 'low', 'beat-of-4', 'beat-of-3', 'clock'];
+    const fromSteps: FireEvent[] = [];
+    let clicks = 0;
+    for (let t = 0; t < 60 * 60; t++) {
+      if (rng() < 0.05) {
+        const id = ids[Math.floor(rng() * ids.length)]!;
+        for (let i = 1 + Math.floor(rng() * 3); i > 0; i--) {
+          const fired = sim.stimulate(id);
+          // A click on a note plays it at once; nothing else fires a note.
+          expect(fired.filter((e) => e.kind === 'note').length).toBe(id === 'high' || id === 'low' ? 1 : 0);
+          clicks++;
+        }
+      }
+      fromSteps.push(...sim.step());
+    }
+    expect(clicks).toBeGreaterThan(100);
+    expect(fromSteps.filter((e) => e.kind === 'note')).toEqual(expected);
+    sim.reset();
+    expect(sim.run(60 * 60).filter((e) => e.kind === 'note')).toEqual(expected);
   });
 
   it('becomes 5 against 4 with the thresholds from the tips', () => {
@@ -581,6 +729,25 @@ describe('wandering melody', () => {
       }
       sim.runSeconds(120);
       expect(sim.pulses().length).toBe(walkers);
+    }
+  });
+
+  it('with any seed, both default walkers step to a neighbour every 73 ticks, and a reset replays the same tune', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      const sim = new Simulation(wander.network, { seed });
+      const notes = notesOf(sim.runSeconds(300));
+      const walkers = [0, WANDER_START_GAP * 60].map((phase) => notes.filter((e) => (e.tick - WANDER_FIRST) % WANDER_STEP_TICKS === phase));
+      expect(walkers[0]!.length + walkers[1]!.length, `seed ${seed}`).toBe(notes.length);
+      for (const walk of walkers) {
+        expect(walk.length, `seed ${seed}`).toBeGreaterThan(240);
+        expect(walk[0]!.note).toBe(72);
+        for (let i = 1; i < walk.length; i++) {
+          expect(walk[i]!.tick - walk[i - 1]!.tick).toBe(WANDER_STEP_TICKS);
+          expect(Math.abs(SCALE_INDEX.get(walk[i]!.note)! - SCALE_INDEX.get(walk[i - 1]!.note)!), `seed ${seed}`).toBe(1);
+        }
+      }
+      sim.reset();
+      expect(notesOf(sim.runSeconds(300)), `seed ${seed}`).toEqual(notes);
     }
   });
 
