@@ -80,6 +80,15 @@ describe('stable loops tips', () => {
   });
 });
 
+describe('keyboard controls', () => {
+  it('only poke neurons that exist', () => {
+    for (const example of EXAMPLES) {
+      const ids = new Set(example.network.neurons.map((n) => n.id));
+      for (const [key, neuron] of Object.entries(example.keys ?? {})) expect(ids.has(neuron), `${example.id}: ${key} -> ${neuron}`).toBe(true);
+    }
+  });
+});
+
 describe('demos', () => {
   it('only poke neurons that exist', () => {
     for (const example of EXAMPLES) {

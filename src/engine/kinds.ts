@@ -79,6 +79,16 @@ export const KIND_INFO: Record<NeuronKind, KindInfo> = {
     params: ['threshold', 'note', 'label'],
     defaults: { threshold: 1, note: 60 },
   },
+  lamp: {
+    kind: 'lamp',
+    name: 'Lamp',
+    description: 'A pixel: it glows while it holds charge (+1 turns it on, -1 off). A grid of Lamps makes a dot-matrix display.',
+    glyph: '',
+    color: '#ffb43d',
+    pulseCharge: 1,
+    params: ['threshold', 'label'],
+    defaults: { threshold: 9 },
+  },
 };
 
 /** Characters a Digit neuron uses to show charges 0..35. */

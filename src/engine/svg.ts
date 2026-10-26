@@ -94,6 +94,14 @@ export function networkToSvg(network: Network, options: SvgOptions = {}): string
   for (const n of network.neurons) {
     const info = KIND_INFO[n.kind];
     const x = n.x * cell + cell * 0.08, y = n.y * cell + cell * 0.08, s = cell * 0.84;
+    if (n.kind === 'lamp') {
+      // A dot-matrix pixel: lit while it holds charge, a dark dot otherwise.
+      const lit = (sim ? sim.charge(n.id) : 0) > 0;
+      const cx = (n.x + 0.5) * cell, cy = (n.y + 0.5) * cell;
+      if (lit) out.push(`<circle cx="${cx}" cy="${cy}" r="${cell * 0.5}" fill="${info.color}" fill-opacity="0.25"/>`);
+      out.push(`<circle cx="${cx}" cy="${cy}" r="${cell * 0.38}" fill="${lit ? info.color : '#2b2416'}" stroke="${info.color}" stroke-opacity="${lit ? 1 : 0.35}" stroke-width="${cell / 24}"/>`);
+      continue;
+    }
     out.push(`<rect x="${x}" y="${y}" width="${s}" height="${s}" rx="${cell * 0.16}" fill="${info.color}"/>`);
     let text = n.label ?? info.glyph;
     if (n.kind === 'character') text = digitText(sim ? sim.charge(n.id) : 0);

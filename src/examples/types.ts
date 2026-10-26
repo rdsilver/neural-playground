@@ -1,6 +1,6 @@
 import type { Network } from '../engine';
 
-export const EXAMPLE_CATEGORIES = ['Start here', 'Calculators', 'Counting', 'Music', 'Patterns', 'Classics'] as const;
+export const EXAMPLE_CATEGORIES = ['Start here', 'Calculators', 'Computers', 'Counting', 'Music', 'Patterns', 'Classics'] as const;
 export type ExampleCategory = (typeof EXAMPLE_CATEGORIES)[number];
 
 /** One step of an example's demo: poke a neuron and/or change the caption. */
@@ -29,6 +29,11 @@ export interface Example {
   autoplay?: boolean;
   /** Suggested simulation speed multiplier (default 1). */
   speed?: number;
+  /**
+   * Optional keyboard controls while the example runs: KeyboardEvent.key
+   * (e.g. 'ArrowLeft', 'a', ' ') to the id of the neuron that key pokes.
+   */
+  keys?: Record<string, string>;
   /**
    * Optional scripted demo, played when the example loads (and on replay).
    * Schedule it with scheduleDemo() so the app and tests agree on timing.

@@ -22,6 +22,7 @@ const FEATURED_THUMB = { w: 560, h: 315 };
 const BLURBS: Record<ExampleCategory, string> = {
   'Start here': 'Small circuits, one idea each. The best place to begin.',
   Calculators: 'Arithmetic done entirely with spikes. Press the keys!',
+  Computers: 'Memory, a display and a program, all made of neurons.',
   Counting: 'Counters, clocks and carries.',
   Music: 'Note neurons turn activity into melody. Turn the sound on.',
   Patterns: 'Loops, cascades and rhythms that emerge from simple rules.',

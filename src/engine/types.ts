@@ -1,7 +1,7 @@
 // Serializable description of a neural network. Everything in here is plain
 // JSON so it can be saved, shared in a URL, or written by hand in an example.
 
-export const NEURON_KINDS = ['normal', 'character', 'negative', 'random', 'timer', 'note'] as const;
+export const NEURON_KINDS = ['normal', 'character', 'negative', 'random', 'timer', 'note', 'lamp'] as const;
 export type NeuronKind = (typeof NEURON_KINDS)[number];
 
 export interface NeuronSpec {

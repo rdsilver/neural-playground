@@ -47,5 +47,7 @@ export function describeNeuron(n: NeuronSpec): string {
       const name = noteName(n.note ?? KIND_INFO.note.defaults.note ?? 60);
       return t <= 1 ? `Plays ${name} every time it fires, on every pulse it receives.` : `Plays ${name} every time it fires: on its ${ordinal(t)} charge.`;
     }
+    case 'lamp':
+      return `Glows while it holds charge: +1 turns it on, −1 turns it off. ${firesOn(t)}.`;
   }
 }
