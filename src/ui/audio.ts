@@ -1,12 +1,15 @@
 // Small Web Audio synth for Note neurons: a soft plucked bell (triangle
 // body with a fast filter sweep plus two quiet sine partials), polyphonic,
-// through a compressor so a burst of notes never clips.
+// through a compressor so a burst of notes never clips. Notes can start a
+// little in the future, so each one sounds at its own simulation tick (see
+// scheduleNotes in music.ts).
 
 import { midiToFrequency } from '../engine';
+import type { ScheduledNote } from './music';
 
 const MAX_VOICES = 24;
-/** Most new notes started in one animation frame (bursts at high speed). */
-const MAX_NOTES_PER_FRAME = 6;
+/** Scheduling slack: notes start this far ahead, so none is late. */
+const LOOKAHEAD = 0.01;
 
 interface Voice {
   out: GainNode;
@@ -55,6 +58,11 @@ export class Synth {
     return this._muted;
   }
 
+  /** True until a user gesture has let the browser start audio. */
+  get locked(): boolean {
+    return this.ctx?.state !== 'running';
+  }
+
   get volume(): number {
     return this._volume;
   }
@@ -78,24 +86,23 @@ export class Synth {
     if (this.ctx && this.master) this.master.gain.setTargetAtTime(this.outputGain, this.ctx.currentTime, 0.02);
   }
 
-  /** Play the notes fired during one frame (deduplicated and capped). */
-  playMany(notes: readonly number[]): void {
-    if (!notes.length) return;
-    const unique = [...new Set(notes)].slice(0, MAX_NOTES_PER_FRAME);
-    const gain = 1 / Math.sqrt(unique.length);
-    for (const n of unique) this.play(n, gain);
+  /** Play one frame's notes, each at its own offset (see scheduleNotes). */
+  playMany(notes: readonly ScheduledNote[]): void {
+    for (const n of notes) this.play(n.midi, n.gain, n.delay);
   }
 
-  /** Play one MIDI note now. `gain` scales its loudness (0..1). */
-  play(midi: number, gain = 1): void {
+  /** Play one MIDI note, `delay` seconds from now. `gain` scales its loudness (0..1). */
+  play(midi: number, gain = 1, delay = 0): void {
     const ctx = this.ctx;
     if (!ctx || !this.input || this._muted || ctx.state !== 'running') return;
-    const t = ctx.currentTime + 0.005;
+    const t = ctx.currentTime + LOOKAHEAD + Math.max(0, delay);
     const f = midiToFrequency(midi);
     // Higher notes decay faster, like a real plucked string or bell.
     const decay = Math.max(0.45, Math.min(1.6, 1.6 - (midi - 48) * 0.022));
 
     const out = ctx.createGain();
+    // Silent until it starts (a stolen voice that never started stays silent).
+    out.gain.value = 0;
     out.gain.setValueAtTime(0, t);
     out.gain.linearRampToValueAtTime(0.26 * gain, t + 0.004);
     out.gain.setTargetAtTime(0, t + 0.004, decay / 4);

@@ -217,6 +217,7 @@ function thumbnail(renderer: Renderer, canvas: HTMLCanvasElement, ex: Example, s
       tool: 'select',
       kind: 'normal',
       hover: null,
+      keyCursor: null,
       preview: null,
       pendingSource: null,
       pointer: null,

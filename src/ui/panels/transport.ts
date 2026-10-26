@@ -1,7 +1,7 @@
 // The floating transport pill at the bottom centre: reset, a big play /
-// pause, single steps, speed, the simulated clock and the demo's progress
-// (or a replay button once it is over). On phones it is the dock's lower
-// row and also carries zoom-to-fit.
+// pause, Step (to the next event; Shift-click for one tick), speed, the
+// simulated clock and the demo's progress (or a replay button once it is
+// over). On phones it is the dock's lower row and also carries zoom-to-fit.
 
 import type { App } from '../app';
 import { h } from '../dom';
@@ -35,13 +35,19 @@ export class Transport {
     this.replay.hidden = true;
     tipped(this.time, 'Simulated time');
 
+    // Step runs to the next moment anything happens; Shift-click for one tick.
+    const step = tipped(
+      h('button', { class: 'btn icon-btn', type: 'button', html: icons.step, onclick: (e: MouseEvent) => app.step(e.shiftKey ? 'tick' : 'event') }),
+      'Step to next event',
+      app.keysFor('step'),
+      'Runs on until a pulse lands or a neuron fires, then pauses. Shift-click (or ,) for a single tick.',
+    );
     this.el = h(
       'footer',
       { class: 'transport island', role: 'toolbar', 'aria-label': 'Simulation controls', 'data-tip-side': 'top' },
       btn('reset', 'Reset', 'reset', () => app.reset()),
       this.play,
-      btn('step', 'Step one tick', 'step', () => app.step()),
-      btn('fire', 'Step to next fire', 'step-fire', () => app.step(true), 'wide-only'),
+      step,
       h('span', { class: 'island-sep', 'aria-hidden': 'true' }),
       this.speed,
       this.time,

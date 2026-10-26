@@ -49,6 +49,10 @@ describe('Store', () => {
     store.setTool('select');
     expect(tools).toEqual(['place', 'select']);
     expect(store.kind).toBe('note');
+    // The keyboard cursor picks a kind without changing the tool.
+    store.setKind('timer', false);
+    expect(store.tool).toBe('select');
+    expect(store.kind).toBe('timer');
   });
 
   it('exposes the single selected neuron', () => {
@@ -57,17 +61,5 @@ describe('Store', () => {
     expect(store.selectedNeuron?.id).toBe('a');
     store.toggleSelected('neuron', 'b');
     expect(store.selectedNeuron).toBeUndefined();
-  });
-
-  it('marks selections made in passing as quiet, and keeps that through edits', () => {
-    const store = new Store(sample(), { title: 'Sample' });
-    const seen: boolean[] = [];
-    store.on('selection', () => seen.push(store.selectionQuiet));
-    store.selectOnly('neuron', 'a', true);
-    store.selectOnly('neuron', 'a');
-    store.select({ neurons: new Set(['a', 'b']), texts: new Set(), connection: null }, true);
-    store.commit(deleteItems(store.network, { neurons: ['a'] }), 'Delete');
-    expect(seen).toEqual([true, false, true, true]);
-    expect([...store.selection.neurons]).toEqual(['b']);
   });
 });

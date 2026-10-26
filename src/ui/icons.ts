@@ -47,6 +47,7 @@ export const icons = {
   arrowRight: svg('<path d="M4 10h11.5M11 5.5l4.5 4.5-4.5 4.5"/>'),
   check: svg('<path d="m4.5 10.5 3.5 3.5 7.5-8" stroke-width="2"/>'),
   stats: svg('<path d="M4 16V9.5M8.7 16V5M13.3 16v-4.5M18 16H2.5" transform="translate(.5 0)"/>'),
+  inspect: svg('<rect x="3" y="4" width="14" height="12" rx="2"/><path d="M11.5 4v12M13.8 7.5h1.2M13.8 10h1.2"/>'),
   replay: svg('<path d="M4 10a6 6 0 1 0 1.8-4.3"/><path d="M4 3.5V7h3.5"/><path d="M8.6 7.6v4.8l3.8-2.4z" fill="currentColor" stroke-width="1.2"/>'),
 };
 

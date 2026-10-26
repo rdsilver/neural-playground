@@ -96,7 +96,9 @@ export class Hud {
     const click = touch ? 'Tap' : 'Click';
     const lower = click.toLowerCase();
     const kind = KIND_INFO[store.kind].name;
-    if (!store.network.neurons.length && !store.network.texts?.length) return '';
+    if (app.keyCursorShown) return 'Arrows move the cursor · 1–6 place a neuron · Enter selects or places · N jumps to the next neuron';
+    // An empty board has its own card, except while placing.
+    if (!store.network.neurons.length && !store.network.texts?.length && store.tool !== 'place') return '';
     if (runner.overloaded) return 'Paused: this network multiplies pulses without limit · R resets it';
     const preview = input.preview;
     if (preview?.type === 'connect') {
@@ -126,12 +128,13 @@ export class Hud {
     if (hover?.type === 'connection') return `${click} to select this connection`;
     if (hover?.type === 'text') return 'Double-click to edit · drag to move';
     if (hover?.type === 'neuron') {
-      return runner.playing ? 'Click to poke (+1 charge) · right-click to inspect · drag to move' : 'Click to inspect · drag to move · drag the handle to connect';
+      if (!runner.playing) return 'Click to inspect · drag to move · drag the handle to connect';
+      return store.index.byId.get(hover.id)?.kind === 'timer'
+        ? 'Timers fire on their own · Shift-click or right-click to inspect'
+        : 'Click to poke (+1 charge) · Shift-click or right-click to inspect';
     }
-    if (selectionSize(store.selection) && !app.inspector.isOpen) {
-      return touch ? 'Selected · long-press it to inspect' : 'Selected · right-click it to inspect · Delete removes it';
-    }
-    if (runner.playing) return touch ? `Tap a neuron to poke it · long-press to inspect` : 'Click a neuron to poke it · Space pauses';
+    if (selectionSize(store.selection)) return touch ? 'Tap empty space to deselect' : 'Arrows move it · Delete removes it · Esc deselects';
+    if (runner.playing) return touch ? 'Tap a neuron to poke it · long-press to inspect it' : 'Click a neuron to poke it · Shift-click to inspect · Space pauses';
     return touch ? 'Paused · tap a neuron to inspect it' : 'Paused · Space to run · click a neuron to inspect it';
   }
 }

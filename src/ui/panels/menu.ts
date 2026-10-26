@@ -13,6 +13,7 @@ export type MenuEntry =
 export class Menu {
   readonly el = h('div', { class: 'menu', role: 'menu', tabindex: -1, hidden: true });
   private opener: HTMLElement | null = null;
+  private onClose: (() => void) | null = null;
 
   constructor(label: string) {
     this.el.setAttribute('aria-label', label);
@@ -34,9 +35,11 @@ export class Menu {
    * focus goes to the first item; opened with a pointer, to the menu itself
    * (arrow keys still work). `opener` gets focus back when it closes.
    */
-  show(x: number, y: number, entries: MenuEntry[], opts: { opener?: HTMLElement; alignRight?: boolean; keyboard?: boolean } = {}): void {
+  show(x: number, y: number, entries: MenuEntry[], opts: { opener?: HTMLElement; alignRight?: boolean; keyboard?: boolean; onClose?: () => void } = {}): void {
     const { opener = null, alignRight = false, keyboard = false } = opts;
+    this.close(false);
     this.opener = opener;
+    this.onClose = opts.onClose ?? null;
     this.el.replaceChildren(
       ...entries.map((entry) => {
         if (entry === 'separator') return h('hr', { role: 'separator' });
@@ -62,9 +65,14 @@ export class Menu {
     );
     this.el.hidden = false;
     const r = this.el.getBoundingClientRect();
-    const left = alignRight ? x - r.width : x;
+    // Like a native menu, flip to the other side of the point rather than
+    // slide over it (it would cover the neuron it is about).
+    let left = alignRight ? x - r.width : x;
+    if (!alignRight && left + r.width > innerWidth - 8) left = x - r.width;
+    let top = y;
+    if (top + r.height > innerHeight - 8) top = y - r.height;
     this.el.style.left = `${Math.max(8, Math.min(innerWidth - r.width - 8, left))}px`;
-    this.el.style.top = `${Math.max(8, Math.min(innerHeight - r.height - 8, y))}px`;
+    this.el.style.top = `${Math.max(8, Math.min(innerHeight - r.height - 8, top))}px`;
     if (keyboard) this.items()[0]?.focus();
     else this.el.focus({ preventScroll: true });
   }
@@ -72,6 +80,9 @@ export class Menu {
   close(restoreFocus = true): void {
     if (this.el.hidden) return;
     this.el.hidden = true;
+    const onClose = this.onClose;
+    this.onClose = null;
+    onClose?.();
     if (restoreFocus) this.opener?.focus({ preventScroll: true });
   }
 

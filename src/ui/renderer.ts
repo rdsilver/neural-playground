@@ -19,7 +19,7 @@ import {
 import type { Bounds, Camera } from './camera';
 import { prefersReducedMotion } from './dom';
 import { connectionPath, endTangent, isSquare, pathBounds, pathLength, type ConnectionPath } from './geometry';
-import { pairKey, type NetIndex } from './netops';
+import { cellKey, pairKey, type NetIndex } from './netops';
 import type { Selection, Tool } from './store';
 import { withAlpha, type Palette } from './theme';
 
@@ -67,15 +67,18 @@ export interface Scene {
   /** Demo presses coming up within `tapLead` ticks (the ghost finger hovers over them). */
   upcomingTaps: readonly { neuron: string; inTicks: number }[];
   tapLead: number;
+  /** The keyboard's cell cursor, while the board has keyboard focus. */
+  keyCursor: { x: number; y: number } | null;
 }
 
 interface Ripple {
   id: string;
   start: number;
+  /** Charge added; 0 for a poke the neuron ignored (a timer). */
   charge: number;
 }
 
-/** Connection paths by "from>to" key, and by source then target (fast pulse lookup). */
+/** Connection paths by pairKey(from, to), and by source then target (pulse lookup and hit-testing). */
 export interface PathSet {
   byKey: Map<string, ConnectionPath>;
   byFrom: Map<string, Map<string, ConnectionPath>>;
@@ -134,7 +137,7 @@ export class Renderer {
     for (const e of events) this.flashes.set(e.neuron, now);
   }
 
-  /** Show a "+1" ripple where the user poked. */
+  /** Show a "+1" ripple where the user poked (charge 0: a quiet "ignored" ring). */
   poke(id: string, charge: number, now: number): void {
     this.ripples.push({ id, start: now, charge });
   }
@@ -724,13 +727,15 @@ export class Renderer {
     }
     if (hover?.type === 'cell' && scene.tool === 'place' && !preview) this.ghost(scene, hover.x, hover.y);
 
-    // Selection.
-    const invalid = preview?.type === 'move' && !preview.valid;
-    for (const id of selection.neurons) {
+    // Selection (while dragging, the items being dragged, which only become
+    // the selection once they have moved).
+    const moving = preview?.type === 'move' ? preview : null;
+    const invalid = !!moving && !moving.valid;
+    for (const id of moving ? moving.neurons : selection.neurons) {
       const n = scene.index.byId.get(id);
       if (n) ring(n, invalid ? p.danger : p.accent, 1.75);
     }
-    for (const id of selection.texts) {
+    for (const id of moving ? moving.texts : selection.texts) {
       const t = scene.index.texts.get(id);
       if (!t) continue;
       const moved = preview?.type === 'move' ? { ...t, x: t.x + preview.dx, y: t.y + preview.dy } : t;
@@ -803,6 +808,8 @@ export class Renderer {
       ctx.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x, b.y - a.y);
     }
 
+    if (scene.keyCursor) this.drawKeyCursor(scene, scene.keyCursor.x, scene.keyCursor.y);
+
     // Poke ripples with a floating "+1".
     for (const r of this.ripples) {
       const n = scene.index.byId.get(r.id);
@@ -810,6 +817,17 @@ export class Renderer {
       const t = (now - r.start) / RIPPLE_MS;
       if (t >= 1) continue;
       const c = cam.toScreen(n.x + 0.5, n.y + 0.5);
+      if (r.charge === 0) {
+        // Ignored (a timer): a muted ring that does not grow.
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, s * 0.55, 0, TAU);
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = withAlpha(p.ink, 0.45 * (1 - t));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        continue;
+      }
       // Reduced motion: the ring and the "+1" stay put and simply fade.
       const grow = this.reduced ? 0 : t;
       ctx.beginPath();
@@ -864,6 +882,50 @@ export class Renderer {
       ctx.strokeStyle = withAlpha(p.ink, 0.55 * (1 - t));
       ctx.stroke();
     }
+  }
+
+  /**
+   * The keyboard's cell cursor: corner brackets around a cell, with a faint
+   * preview of the kind that 1-6 / Enter would place when the cell is free.
+   */
+  private drawKeyCursor(scene: Scene, x: number, y: number): void {
+    const { ctx, palette: p } = this;
+    const cam = scene.camera;
+    const s = cam.scale;
+    const free = !scene.index.byCell.has(cellKey(x, y));
+    if (free && s >= 14) {
+      const c = cam.toScreen(x + 0.5, y + 0.5);
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      const ghost: NeuronSpec = { id: '', kind: scene.kind, x, y, threshold: 1 };
+      if (scene.kind === 'note') ghost.note = 60;
+      this.drawNeuron(ghost, c.x, c.y, s, scene, 0);
+      ctx.restore();
+    }
+    const tl = cam.toScreen(x, y);
+    const pad = Math.max(1, s * 0.02);
+    const x0 = tl.x + pad;
+    const y0 = tl.y + pad;
+    const x1 = tl.x + s - pad;
+    const y1 = tl.y + s - pad;
+    const arm = Math.max(5, s * 0.26);
+    ctx.beginPath();
+    for (const [cx, cy, sx, sy] of [
+      [x0, y0, 1, 1],
+      [x1, y0, -1, 1],
+      [x0, y1, 1, -1],
+      [x1, y1, -1, -1],
+    ] as const) {
+      ctx.moveTo(cx + sx * arm, cy);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx, cy + sy * arm);
+    }
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = p.accent;
+    ctx.stroke();
+    ctx.lineCap = 'butt';
   }
 
   private ghost(scene: Scene, x: number, y: number): void {

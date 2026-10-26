@@ -38,4 +38,9 @@ export class Toasts {
     this.el.append(toast);
     window.setTimeout(() => toast.remove(), options.duration ?? (options.error ? 5000 : 3200));
   }
+
+  /** Remove the toast shown with this key, if it is still up. */
+  dismiss(key: string): void {
+    this.el.querySelector(`[data-key="${key}"]`)?.remove();
+  }
 }

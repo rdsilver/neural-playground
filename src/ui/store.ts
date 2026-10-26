@@ -43,11 +43,6 @@ export class Store {
   doc: DocInfo;
   index: NetIndex;
   selection: Selection = EMPTY_SELECTION;
-  /**
-   * The current selection was made in passing (a neuron clicked to poke it
-   * while running): show it on the board, but do not open the inspector.
-   */
-  selectionQuiet = false;
   tool: Tool = 'select';
   kind: NeuronKind = 'normal';
   readonly history = new History<Snapshot>();
@@ -123,18 +118,17 @@ export class Store {
     const c = s.connection;
     const connection = c && this.index.pairs.has(pairKey(c.from, c.to)) ? c : null;
     if (neurons.length !== s.neurons.size || texts.length !== s.texts.size || connection !== c) {
-      this.select({ neurons: new Set(neurons), texts: new Set(texts), connection }, this.selectionQuiet);
+      this.select({ neurons: new Set(neurons), texts: new Set(texts), connection });
     }
   }
 
-  select(selection: Selection, quiet = false): void {
+  select(selection: Selection): void {
     this.selection = selection;
-    this.selectionQuiet = quiet;
     this.emit('selection', selection);
   }
 
-  selectOnly(kind: 'neuron' | 'text', id: string, quiet = false): void {
-    this.select({ neurons: new Set(kind === 'neuron' ? [id] : []), texts: new Set(kind === 'text' ? [id] : []), connection: null }, quiet);
+  selectOnly(kind: 'neuron' | 'text', id: string): void {
+    this.select({ neurons: new Set(kind === 'neuron' ? [id] : []), texts: new Set(kind === 'text' ? [id] : []), connection: null });
   }
 
   /** Add or remove one item from a multi-selection (shift-click). */
@@ -161,10 +155,10 @@ export class Store {
     this.emit('tool', tool);
   }
 
-  /** Pick a neuron kind: switches to the place tool. */
-  setKind(kind: NeuronKind): void {
+  /** Pick a neuron kind: switches to the place tool (unless `placeTool` is false). */
+  setKind(kind: NeuronKind, placeTool = true): void {
     this.kind = kind;
-    this.tool = 'place';
+    if (placeTool) this.tool = 'place';
     this.emit('tool', this.tool);
   }
 

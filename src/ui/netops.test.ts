@@ -10,6 +10,7 @@ import {
   indexNetwork,
   moveItems,
   nextId,
+  pairKey,
   pasteClip,
   reverseConnection,
   setTwoWay,
@@ -77,9 +78,9 @@ describe('netops', () => {
 
   it('connects, makes two-way and reverses', () => {
     let net = connect(sample(), 'c', 'a');
-    expect(indexNetwork(net).pairs.has('c>a')).toBe(true);
+    expect(indexNetwork(net).pairs.has(pairKey('c', 'a'))).toBe(true);
     net = setTwoWay(net, 'c', 'a', false);
-    expect(indexNetwork(net).pairs.has('a>c')).toBe(false);
+    expect(indexNetwork(net).pairs.has(pairKey('a', 'c'))).toBe(false);
     expect(connect(net, 'a', 'a')).toBe(net);
     net = reverseConnection(net, 'c', 'a');
     expect(net.connections).toContainEqual({ from: 'a', to: 'c' });
@@ -103,5 +104,26 @@ describe('netops', () => {
     expect(idx.byCell.size).toBe(5);
     expect(pasted.net.connections).toHaveLength(3);
     expect(normalizeNetwork(pasted.net)).toEqual(pasted.net);
+  });
+
+  it('keys connections so that ids containing ">" never collide', () => {
+    const net = normalizeNetwork({
+      version: 2,
+      neurons: [
+        { id: 'a>b', kind: 'normal', x: 0, y: 0, threshold: 1 },
+        { id: 'c', kind: 'normal', x: 2, y: 0, threshold: 1 },
+        { id: 'a', kind: 'normal', x: 0, y: 2, threshold: 1 },
+        { id: 'b>c', kind: 'normal', x: 2, y: 2, threshold: 1 },
+      ],
+      connections: [{ from: 'a>b', to: 'c' }],
+    });
+    expect(pairKey('a>b', 'c')).not.toBe(pairKey('a', 'b>c'));
+    const idx = indexNetwork(net);
+    expect(idx.pairs.has(pairKey('a>b', 'c'))).toBe(true);
+    expect(idx.pairs.has(pairKey('a', 'b>c'))).toBe(false);
+    // Deleting one connection by its key leaves a look-alike alone.
+    const both = connect(net, 'a', 'b>c');
+    const left = deleteItems(both, { connections: [{ from: 'a>b', to: 'c' }] });
+    expect(left.connections).toEqual([{ from: 'a', to: 'b>c' }]);
   });
 });

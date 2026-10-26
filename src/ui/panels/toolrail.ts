@@ -15,7 +15,7 @@ import { tipped } from './tooltip';
 import { historyButtons } from './viewcontrols';
 
 const TOOLS: { tool: Tool; icon: IconName; label: string; title: string; desc: string }[] = [
-  { tool: 'select', icon: 'select', label: 'Select', title: 'Select & move', desc: 'Click to select (and poke while running). Drag to move; drag the handle to connect; Shift-drag to box-select.' },
+  { tool: 'select', icon: 'select', label: 'Select', title: 'Select & move', desc: 'Click a neuron to poke it while running, or to inspect it while paused (Shift-click inspects any time). Drag to move; drag the handle to connect; Shift-drag to box-select.' },
   { tool: 'connect', icon: 'connect', label: 'Connect', title: 'Connect', desc: 'Drag from one neuron to another, or click both. Connecting an existing pair removes it; hold Shift for two-way.' },
   { tool: 'text', icon: 'text', label: 'Text', title: 'Text', desc: 'Click anywhere to add a note. Double-click a note to edit it.' },
   { tool: 'hand', icon: 'hand', label: 'Hand', title: 'Hand', desc: 'Drag to pan. Click neurons to poke them, without selecting.' },

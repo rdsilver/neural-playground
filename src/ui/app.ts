@@ -7,6 +7,7 @@ import {
   emptyNetwork,
   encodeShareCode,
   KIND_INFO,
+  NEURON_KINDS,
   networkBounds,
   networkFromJson,
   networkToJson,
@@ -15,6 +16,7 @@ import {
   type Network,
 } from '../engine';
 import { EXAMPLES, findExample, type Example } from '../examples';
+import { describeNeuron } from './describe';
 import { Synth } from './audio';
 import { bestFit, Camera, DEFAULT_SCALE } from './camera';
 import type { Command } from './commands';
@@ -24,6 +26,7 @@ import { BoardInput, type BoardHost, type Hit } from './input';
 import {
   addNeuron,
   addText,
+  cellKey,
   connect,
   copyItems,
   deleteItems,
@@ -33,10 +36,12 @@ import {
   pasteClip,
   updateNeuron,
   type Clip,
+  type ItemSet,
   type NeuronPatch,
 } from './netops';
 import { appCommands } from './app-commands';
-import { insetOptions, type Chrome } from './layout';
+import { insetOptions, revealOffset, type Chrome } from './layout';
+import { scheduleNotes } from './music';
 import { ExampleCard } from './panels/card';
 import { Gallery } from './panels/gallery';
 import { HelpDialog } from './panels/help';
@@ -82,8 +87,11 @@ export class App implements BoardHost {
     tabindex: 0,
     role: 'application',
     'aria-roledescription': 'neural network board',
-    'aria-label': 'Neural network board. Use the tool rail or number keys to choose a neuron kind, click to place, Space to play or pause.',
+    'aria-label':
+      'Neural network board. Arrow keys move a cell cursor, 1 to 6 place a neuron there, Enter selects or places, N and Shift+N step through the neurons, Enter pokes the selected neuron, Space plays or pauses.',
   });
+  /** Screen-reader announcements (what the keyboard selected, where the cursor is). */
+  private announcer = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
   private renderer: Renderer;
   readonly input: BoardInput;
   private topbar!: TopBar;
@@ -107,9 +115,19 @@ export class App implements BoardHost {
   private lastFrame = 0;
   private lastLive = 0;
   private autosaveTimer = 0;
+  private savePending = false;
   private clip: Clip | null = null;
   private overloadShown = false;
   private wasAnimating = false;
+  /**
+   * The keyboard's cell cursor (arrows move it, 1-6 or Enter place there).
+   * Shown only while the board has keyboard focus and nothing is selected.
+   */
+  private keyCell: { x: number; y: number } | null = null;
+  /** What the open board menu is about: highlighted on the board while it is up. */
+  private menuTarget: Hit | null = null;
+  /** Show "tap anywhere for sound" when the next note plays while audio is locked. */
+  private soundHint = false;
 
   private constructor(root: HTMLElement, network: Network, doc: DocInfo, settings: Settings) {
     this.root = root;
@@ -186,15 +204,18 @@ export class App implements BoardHost {
 
     // On phones the rail and the transport stack into one bottom dock; on
     // wider screens the dock wrapper is display: contents and each floats.
+    // Every island floats over the stage, so DOM order only sets the Tab
+    // order: the top islands and notes first, then the tools and transport,
+    // the board, what is selected on it, and the view controls last.
     const dock = h('div', { class: 'dock' }, this.rail.el, this.transport.el);
     this.shell.append(
-      this.stage,
       h('header', { class: 'topbar' }, this.topbar.left, this.topbar.right),
       this.card.el,
-      this.inspector.el,
-      this.viewControls.el,
-      this.hud.el,
       dock,
+      this.stage,
+      this.inspector.el,
+      this.hud.el,
+      this.viewControls.el,
     );
     this.root.replaceChildren(
       this.shell,
@@ -208,22 +229,36 @@ export class App implements BoardHost {
       this.help.el,
       this.cmdPalette.el,
       this.share.el,
+      this.announcer,
     );
     installTooltips(this.root);
     this.buildStageHint();
 
     this.store.on('network', ({ docChanged }) => {
-      this.runner.load(this.store.network);
       if (docChanged) {
-        this.runner.sim.reset();
-        this.runner.stopDemo();
+        // A different document (including undo/redo across an example load):
+        // a clean run, no demo, no effects from the old one.
+        this.runner.open(this.store.network);
         this.renderer.clearEffects();
-      }
+        this.keyCell = null;
+        this.soundHint = false;
+      } else this.runner.load(this.store.network);
       this.scheduleAutosave();
       this.updateStageHint();
       this.invalidate();
     });
-    this.store.on('selection', () => this.invalidate());
+    // A finished undo/redo or edit makes an old "Canvas cleared · Undo" toast stale.
+    this.store.on('history', () => this.toasts.dismiss('clear'));
+    this.store.on('selection', () => {
+      // The keyboard cursor follows a single selected neuron.
+      const n = this.store.selectedNeuron;
+      if (n && this.keyCell) this.keyCell = { x: n.x, y: n.y };
+      this.invalidate();
+    });
+    this.runner.onStepEnd = (found) => {
+      if (!found) this.toasts.show('Nothing fired in the next 10 seconds', { key: 'step', duration: 2200 });
+      this.transport.update();
+    };
     this.store.on('tool', () => {
       if (this.store.tool !== 'connect') this.input.pendingSource = null;
       this.updateStageHint();
@@ -238,6 +273,7 @@ export class App implements BoardHost {
     this.installKeyboard();
     this.installDragAndDrop();
     this.installAudioUnlock();
+    this.installSaveOnExit();
     window.addEventListener('hashchange', () => void this.openHash());
     new ResizeObserver(() => this.resize()).observe(this.stage);
     matchMedia('(resolution: 1dppx), (resolution: 2dppx), (resolution: 3dppx)').addEventListener?.('change', () => this.resize());
@@ -274,8 +310,12 @@ export class App implements BoardHost {
   private frame(now: number): void {
     const dt = (now - this.lastFrame) / 1000;
     this.lastFrame = now;
-    const events = this.runner.advance(dt);
-    if (events.length) this.onFires(events, now);
+    const runner = this.runner;
+    // Notes from this frame's ticks are spread out to their own tick times.
+    const firstTick = runner.sim.tick + 1;
+    const ticksPerSecond = TICKS_PER_SECOND * (runner.stepping?.speed ?? runner.speed);
+    const events = runner.advance(dt);
+    if (events.length) this.onFires(events, now, firstTick, ticksPerSecond);
     if (this.runner.overloaded !== this.overloadShown) {
       this.overloadShown = this.runner.overloaded;
       if (this.overloadShown)
@@ -314,10 +354,15 @@ export class App implements BoardHost {
     taps.length = 0;
   }
 
-  private onFires(events: readonly FireEvent[], now: number): void {
+  /**
+   * Flash what fired and play its notes. Each note sounds at its own tick's
+   * time within the frame (see scheduleNotes), so rhythm holds at 4× and up;
+   * fires from an instant action (a poke, Fire, a finished step) play now.
+   */
+  private onFires(events: readonly FireEvent[], now: number, firstTick = 0, ticksPerSecond = Infinity): void {
     this.renderer.noteFires(events, now);
-    const notes: number[] = [];
-    for (const e of events) if (e.note !== undefined) notes.push(e.note);
+    const notes = scheduleNotes(events, firstTick, ticksPerSecond);
+    if (notes.length && this.soundHint) this.showSoundHint();
     this.synth.playMany(notes);
   }
 
@@ -329,7 +374,7 @@ export class App implements BoardHost {
       selection: s.selection,
       tool: s.tool,
       kind: s.kind,
-      hover: this.input.hover,
+      hover: this.menuTarget && this.menuTarget.type !== 'empty' ? this.menuTarget : this.input.hover,
       preview: this.input.preview,
       pendingSource: this.input.pendingSource,
       pointer: this.input.pointer,
@@ -337,8 +382,9 @@ export class App implements BoardHost {
       tick: this.runner.renderTick,
       camera: this.camera,
       handleFor: this.input.handleFor,
-      upcomingTaps: this.runner.playing ? this.runner.upcomingTaps(this.tapLead) : [],
+      upcomingTaps: this.runner.playing || this.runner.stepping ? this.runner.upcomingTaps(this.tapLead) : [],
       tapLead: this.tapLead,
+      keyCursor: this.keyCursorShown ? this.keyCell : null,
     };
   }
 
@@ -360,8 +406,12 @@ export class App implements BoardHost {
 
   setPlaying(playing: boolean): void {
     this.runner.playing = playing;
-    // Let the runaway guard trip (and say so) again if it is still runaway.
-    if (playing) this.runner.overloaded = false;
+    if (playing) {
+      // Playing takes over from an animated step. Let the runaway guard trip
+      // (and say so) again if the network is still runaway.
+      this.runner.stepping = null;
+      this.runner.overloaded = false;
+    }
     this.transport.update();
     this.invalidate();
   }
@@ -370,11 +420,24 @@ export class App implements BoardHost {
     this.setPlaying(!this.runner.playing);
   }
 
-  step(toNextFire = false): void {
-    this.setPlaying(false);
-    const events = toNextFire ? this.runner.stepToNextFire() : this.runner.step();
+  /**
+   * Step while paused. 'event' (the Step button) runs quickly to the next
+   * moment anything happens (a pulse lands, a timer or the demo fires) and
+   * pauses there; 'fire' runs on to the next fire; 'tick' advances exactly
+   * one tick (Shift+Step). With reduced motion the steps jump.
+   */
+  step(mode: 'event' | 'fire' | 'tick' = 'event'): void {
     const now = performance.now();
-    this.onFires(events, now);
+    if (mode === 'tick') this.onFires(this.runner.step(), now);
+    else {
+      const finished = this.runner.beginStep(mode);
+      if (finished === null) {
+        this.toasts.show(this.store.network.neurons.length ? 'Nothing is on its way: poke a neuron first, then step' : 'Add some neurons first', { key: 'step', duration: 2600 });
+      } else {
+        this.onFires(finished, now);
+        if (prefersReducedMotion()) this.onFires(this.runner.finishStep(), now);
+      }
+    }
     this.drainTaps(now);
     this.transport.update();
     this.inspector.live();
@@ -427,23 +490,39 @@ export class App implements BoardHost {
   }
 
   poke(id: string, charge = 1): void {
+    const now = performance.now();
+    if (this.store.index.byId.get(id)?.kind === 'timer') {
+      // Timers ignore incoming charge: say so instead of doing nothing.
+      this.renderer.poke(id, 0, now);
+      this.toasts.show('Timers fire on their own: pokes don’t change them', { key: 'timer-poke', duration: 2400 });
+      this.invalidate();
+      return;
+    }
     const events = this.runner.sim.stimulate(id, charge);
-    this.renderer.poke(id, charge, performance.now());
-    if (events.length) this.onFires(events, performance.now());
+    this.renderer.poke(id, charge, now);
+    if (events.length) this.onFires(events, now);
     this.inspector.live();
     this.invalidate();
+  }
+
+  pokeIds(ids: Iterable<string>): void {
+    for (const id of ids) this.poke(id);
   }
 
   pokeSelection(): void {
-    for (const id of this.store.selection.neurons) this.poke(id);
+    this.pokeIds(this.store.selection.neurons);
   }
 
-  fireSelection(): void {
+  fireIds(ids: Iterable<string>): void {
     const events: FireEvent[] = [];
-    for (const id of this.store.selection.neurons) events.push(...this.runner.sim.fire(id));
+    for (const id of ids) events.push(...this.runner.sim.fire(id));
     this.onFires(events, performance.now());
     this.inspector.live();
     this.invalidate();
+  }
+
+  fireSelection(): void {
+    this.fireIds(this.store.selection.neurons);
   }
 
   // --------------------------------------------------------------- editing
@@ -454,6 +533,13 @@ export class App implements BoardHost {
     if (!r) return null;
     this.store.commit(r.net, `Add ${KIND_INFO[kind].name.toLowerCase()}`);
     return r.id;
+  }
+
+  /** Place a neuron of the current kind and select it, so the inspector opens on it. */
+  placeAndSelect(x: number, y: number): string | null {
+    const id = this.place(x, y);
+    if (id) this.store.selectOnly('neuron', id);
+    return id;
   }
 
   connect(from: string, to: string, twoWay: boolean): void {
@@ -507,11 +593,17 @@ export class App implements BoardHost {
 
   deleteSelection(): void {
     const sel = this.store.selection;
-    const count = selectionSize(sel);
-    if (!count) return;
-    const net = deleteItems(this.store.network, { neurons: sel.neurons, texts: sel.texts, connections: sel.connection ? [sel.connection] : [] });
-    this.store.commit(net, count > 1 ? `Delete ${count} items` : 'Delete');
+    if (!selectionSize(sel)) return;
+    this.deleteItems({ neurons: sel.neurons, texts: sel.texts, connections: sel.connection ? [sel.connection] : [] });
     this.store.clearSelection();
+  }
+
+  /** Delete some items (the menu's targets, or the selection) as one undo step. */
+  deleteItems(items: ItemSet): void {
+    const count = [...(items.neurons ?? [])].length + [...(items.texts ?? [])].length + [...(items.connections ?? [])].length;
+    if (!count) return;
+    const only = items.connections && !items.neurons && !items.texts ? 'connection' : '';
+    this.store.commit(deleteItems(this.store.network, items), count > 1 ? `Delete ${count} items` : only ? 'Delete connection' : 'Delete');
   }
 
   selectAll(): void {
@@ -571,7 +663,7 @@ export class App implements BoardHost {
     this.store.replace(emptyNetwork(), { title: 'Untitled network' }, 'Clear canvas');
     this.store.setKind(this.store.kind);
     this.zoomToFit();
-    this.toasts.show('Canvas cleared', { action: { label: 'Undo', run: () => this.undo() } });
+    this.toasts.show('Canvas cleared', { key: 'clear', duration: 6000, action: { label: 'Undo', run: () => this.undo() } });
   }
 
   setTool(tool: Tool): void {
@@ -585,11 +677,22 @@ export class App implements BoardHost {
     this.invalidate();
   }
 
-  /** Right-click menu for whatever is under the pointer (or the selection). */
+  /**
+   * Right-click menu for whatever is under the pointer (or the selection).
+   * The item is highlighted while the menu is up; nothing is selected until
+   * an action needs it (Inspect, Duplicate, Delete).
+   */
   contextMenu(clientX: number, clientY: number, hit: Hit, keyboard = false): void {
-    this.boardMenu.show(clientX, clientY, boardMenuEntries(this, hit), { opener: this.canvas, keyboard });
-    // Right-clicking a neuron, wire or note also inspects it.
-    if (hit.type !== 'empty' && hit.type !== 'cell') this.inspector.setOpen(true);
+    this.menuTarget = hit;
+    this.invalidate();
+    this.boardMenu.show(clientX, clientY, boardMenuEntries(this, hit), {
+      opener: this.canvas,
+      keyboard,
+      onClose: () => {
+        this.menuTarget = null;
+        this.invalidate();
+      },
+    });
   }
 
   /** Long-press on touch: select the item and open the inspector on it. */
@@ -602,7 +705,7 @@ export class App implements BoardHost {
     this.inspector.setOpen(true);
   }
 
-  /** Context-menu key / Shift+F10: open the menu for the selection (or the view centre). */
+  /** Context-menu key / Shift+F10: open the menu for the selection (or the cell cursor, or the view centre). */
   private keyboardContextMenu(): void {
     const r = this.canvas.getBoundingClientRect();
     const n = this.store.selectedNeuron;
@@ -611,9 +714,10 @@ export class App implements BoardHost {
       this.contextMenu(r.left + p.x, r.top + p.y, { type: 'neuron', id: n.id }, true);
       return;
     }
-    const c = this.viewCenterCell();
+    const c = this.keyCursorShown && this.keyCell ? this.keyCell : this.viewCenterCell();
     const p = this.camera.toScreen(c.x + 0.5, c.y + 0.5);
-    this.contextMenu(r.left + p.x, r.top + p.y, { type: 'empty', ...c }, true);
+    const there = this.store.index.byCell.get(cellKey(c.x, c.y));
+    this.contextMenu(r.left + p.x, r.top + p.y, there ? { type: 'neuron', id: there.id } : { type: 'empty', ...c }, true);
   }
 
   // -------------------------------------------------------------- examples
@@ -635,6 +739,28 @@ export class App implements BoardHost {
     else this.runner.stopDemo();
     this.setPlaying(example.autoplay !== false);
     this.zoomToFit(animate);
+    this.offerSound(example);
+  }
+
+  /**
+   * Browsers keep audio locked until the first tap or key press. An example
+   * with Note neurons opened before that arms a hint, shown as soon as a
+   * note would actually sound: the next gesture anywhere turns the sound on
+   * (see installAudioUnlock).
+   */
+  private offerSound(example: Example): void {
+    this.soundHint = !this.synth.muted && this.synth.locked && example.network.neurons.some((n) => n.kind === 'note');
+  }
+
+  private showSoundHint(): void {
+    this.soundHint = false;
+    if (this.synth.muted || !this.synth.locked) return;
+    const tap = matchMedia('(pointer: coarse)').matches ? 'Tap' : 'Click';
+    this.toasts.show(`This one makes music. ${tap} anywhere to turn the sound on.`, {
+      key: 'sound',
+      duration: 9000,
+      action: { label: 'Sound on', run: () => this.synth.unlock() },
+    });
   }
 
   dismissNotes(id: string): void {
@@ -670,6 +796,13 @@ export class App implements BoardHost {
   onInspectorChange(open: boolean): void {
     this.shell.classList.toggle('inspecting', open);
     if (open) this.revealSelection();
+  }
+
+  /** Say something to screen readers (politely, without moving focus). */
+  announce(text: string): void {
+    // Clearing first makes a repeat of the same text be read again.
+    this.announcer.textContent = '';
+    requestAnimationFrame(() => (this.announcer.textContent = text));
   }
 
   openGallery(): void {
@@ -746,7 +879,12 @@ export class App implements BoardHost {
     const phone = width <= 760;
     bottom -= this.runner.demoLive ? (phone ? 84 : 92) : 30;
     const chrome: Chrome = { width, height, top, left: railOnLeft ? rail.right : 0, right: width, bottom };
-    if (this.inspector.isOpen && !phone) chrome.right = rect(this.inspector.el).left;
+    if (this.inspector.isOpen) {
+      // A side panel on wide screens, a bottom sheet on phones.
+      const panel = rect(this.inspector.el);
+      if (phone) chrome.bottom = Math.min(chrome.bottom, panel.top);
+      else chrome.right = panel.left;
+    }
     const card = this.card.rect();
     if (card) chrome.card = { left: card.left - stage.left, top: card.top - stage.top, right: card.right - stage.left, bottom: card.bottom - stage.top };
     return chrome;
@@ -754,38 +892,29 @@ export class App implements BoardHost {
 
   /**
    * After the inspector opens, glide the board so the selected neuron (or
-   * wire, or note) is not hidden under it.
+   * wire, or note) is not hidden under it or any other island.
    */
   private revealSelection(): void {
     const s = this.store;
     const sel = s.selection;
-    let at: { x: number; y: number } | null = null;
     const n = sel.neurons.size ? s.index.byId.get([...sel.neurons][0]!) : undefined;
-    if (n) at = { x: n.x + 0.5, y: n.y + 0.5 };
-    else if (sel.connection) {
+    if (n) return this.reveal(n.x + 0.5, n.y + 0.5);
+    if (sel.connection) {
       const a = s.index.byId.get(sel.connection.from);
       const b = s.index.byId.get(sel.connection.to);
-      if (a && b) at = { x: (a.x + b.x) / 2 + 0.5, y: (a.y + b.y) / 2 + 0.5 };
+      if (a && b) this.reveal((a.x + b.x) / 2 + 0.5, (a.y + b.y) / 2 + 0.5);
     } else if (sel.texts.size) {
       const t = s.index.texts.get([...sel.texts][0]!);
-      if (t) at = { x: t.x, y: t.y };
+      if (t) this.reveal(t.x, t.y);
     }
-    if (!at) return;
-    const stage = this.stage.getBoundingClientRect();
-    const panel = this.inspector.el.getBoundingClientRect();
-    const p = this.camera.toScreen(at.x, at.y);
-    const px = p.x + stage.left;
-    const py = p.y + stage.top;
-    const margin = this.camera.scale * 0.8 + 28;
-    let dx = 0;
-    let dy = 0;
-    if (panel.width >= stage.width - 40) {
-      // Phone sheet along the bottom: keep the item above it.
-      if (py > panel.top - margin) dy = py - (panel.top - margin);
-    } else if (px > panel.left - margin && py > panel.top - margin && py < panel.bottom + margin) {
-      dx = px - (panel.left - margin);
-    }
-    if (!dx && !dy) return;
+  }
+
+  /** Pan (the shortest way) so a world point is in the free part of the board. */
+  private reveal(wx: number, wy: number): void {
+    const p = this.camera.toScreen(wx, wy);
+    const margin = this.camera.scale * 0.8 + 16;
+    const { dx, dy } = revealOffset(p, this.measureChrome(), margin);
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
     const v = this.camera.view;
     this.camera.animateTo({ x: v.x + dx / v.scale, y: v.y + dy / v.scale, scale: v.scale }, prefersReducedMotion() ? 0 : 260);
     this.invalidate();
@@ -915,7 +1044,22 @@ export class App implements BoardHost {
 
   private scheduleAutosave(): void {
     clearTimeout(this.autosaveTimer);
-    this.autosaveTimer = window.setTimeout(() => writeAutosave({ network: this.store.network, doc: this.store.doc }), AUTOSAVE_DELAY);
+    this.savePending = true;
+    this.autosaveTimer = window.setTimeout(() => this.saveNow(), AUTOSAVE_DELAY);
+  }
+
+  /** Write the autosave now (the debounce fired, or the page is going away). */
+  private saveNow(): void {
+    clearTimeout(this.autosaveTimer);
+    this.savePending = false;
+    writeAutosave({ network: this.store.network, doc: this.store.doc });
+  }
+
+  /** Save an edit still waiting on the debounce when the tab is hidden or closed. */
+  private installSaveOnExit(): void {
+    const flush = () => this.savePending && this.saveNow();
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && flush());
   }
 
   // ----------------------------------------------------- input plumbing
@@ -958,6 +1102,10 @@ export class App implements BoardHost {
         this.keyboardContextMenu();
         return;
       }
+      if (this.keyCursorShown && !e.ctrlKey && !e.metaKey && !e.altKey && this.cursorKey(e.key, e.shiftKey)) {
+        e.preventDefault();
+        return;
+      }
       for (const { c, b } of bindings) {
         if (!matches(b, e)) continue;
         e.preventDefault();
@@ -982,8 +1130,20 @@ export class App implements BoardHost {
     let tabbed = false;
     window.addEventListener('keydown', (e) => (tabbed = e.key === 'Tab'), { capture: true });
     window.addEventListener('pointerdown', () => (tabbed = false), { capture: true });
-    this.canvas.addEventListener('focus', () => this.canvas.classList.toggle('kbd-focus', tabbed));
-    this.canvas.addEventListener('blur', () => this.canvas.classList.remove('kbd-focus'));
+    this.canvas.addEventListener('focus', () => {
+      this.canvas.classList.toggle('kbd-focus', tabbed);
+      if (tabbed) this.showKeyCursor();
+    });
+    this.canvas.addEventListener('blur', () => {
+      this.canvas.classList.remove('kbd-focus');
+      this.invalidate();
+    });
+    // Using the mouse on the board ends keyboard mode (and hides the cursor).
+    this.canvas.addEventListener('pointerdown', () => {
+      if (!this.canvas.classList.contains('kbd-focus')) return;
+      this.canvas.classList.remove('kbd-focus');
+      this.invalidate();
+    });
     // Toolbar buttons should not keep focus after a mouse click, so Space
     // keeps meaning play/pause instead of re-pressing the last button.
     document.addEventListener('mousedown', (e) => {
@@ -992,6 +1152,10 @@ export class App implements BoardHost {
     });
   }
 
+  /**
+   * Arrow keys: nudge the selection; with nothing selected, move the cell
+   * cursor while the board has keyboard focus, or pan the view.
+   */
   private arrow(key: string, shift: boolean): void {
     const step = shift ? 5 : 1;
     const dx = key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0;
@@ -999,6 +1163,12 @@ export class App implements BoardHost {
     const sel = this.store.selection;
     if (sel.neurons.size || sel.texts.size) {
       if (!this.moveSelection(dx, dy, 'nudge')) this.toasts.show('Something is in the way', { duration: 1200 });
+      else this.revealSelection();
+    } else if (this.keyCursorShown && this.keyCell) {
+      this.keyCell = { x: this.keyCell.x + dx, y: this.keyCell.y + dy };
+      this.reveal(this.keyCell.x + 0.5, this.keyCell.y + 0.5);
+      this.announceCell();
+      this.invalidate();
     } else {
       this.camera.panBy(-dx * 48, -dy * 48);
       this.invalidate();
@@ -1007,8 +1177,111 @@ export class App implements BoardHost {
 
   private escape(): void {
     if (this.input.cancel()) return;
-    if (selectionSize(this.store.selection)) this.store.clearSelection();
-    else if (this.store.tool !== 'select') this.store.setTool('select');
+    if (selectionSize(this.store.selection)) {
+      // Back to the cursor, on the neuron that was selected.
+      const n = this.store.selectedNeuron;
+      if (n && this.boardHasKeyboard) this.keyCell = { x: n.x, y: n.y };
+      this.store.clearSelection();
+    } else if (this.store.tool !== 'select') this.store.setTool('select');
+  }
+
+  // ------------------------------------------------- keyboard on the board
+
+  /** The board has focus and was reached with the keyboard (Tab). */
+  private get boardHasKeyboard(): boolean {
+    return document.activeElement === this.canvas && this.canvas.classList.contains('kbd-focus');
+  }
+
+  /** The cell cursor is up: keyboard focus on the board and nothing selected. */
+  get keyCursorShown(): boolean {
+    return this.keyCell !== null && this.boardHasKeyboard && selectionSize(this.store.selection) === 0;
+  }
+
+  /** The board got keyboard focus: put the cursor somewhere visible. */
+  private showKeyCursor(): void {
+    const n = this.store.selectedNeuron;
+    if (n) this.keyCell = { x: n.x, y: n.y };
+    else if (!this.keyCell || !this.cellInView(this.keyCell)) this.keyCell = this.freeCenterCell();
+    if (this.keyCursorShown) this.announceCell();
+    this.invalidate();
+  }
+
+  /** Enter and 1-6 act on the cursor's cell. Returns true if the key was used. */
+  private cursorKey(key: string, shift: boolean): boolean {
+    const cell = this.keyCell!;
+    const kindIndex = '123456'.indexOf(key);
+    const there = this.store.index.byCell.get(cellKey(cell.x, cell.y));
+    if (key === 'Enter' && !shift) {
+      if (there) this.selectNeuron(there.id);
+      else this.placeAndSelect(cell.x, cell.y);
+      return true;
+    }
+    if (kindIndex >= 0 && !shift) {
+      // Placing at the cursor keeps the current tool: the mouse is not affected.
+      this.store.setKind(NEURON_KINDS[kindIndex]!, false);
+      if (there) this.toasts.show('That cell is taken: move the cursor to an empty one', { key: 'cursor', duration: 2200 });
+      else this.placeAndSelect(cell.x, cell.y);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * N / Shift+N: select the next or previous neuron in reading order (rows
+   * top to bottom, then left to right), starting from the selection or the
+   * cell cursor, and keep it in view.
+   */
+  selectNext(direction: 1 | -1): void {
+    const neurons = [...this.store.network.neurons].sort((a, b) => a.y - b.y || a.x - b.x);
+    if (!neurons.length) return;
+    const current = this.store.selectedNeuron;
+    let next;
+    if (current) {
+      const i = neurons.findIndex((n) => n.id === current.id);
+      next = neurons[(i + direction + neurons.length) % neurons.length]!;
+    } else if (this.keyCell && this.boardHasKeyboard) {
+      // From the cursor: the first neuron at or after it (or before it, going back).
+      const c = this.keyCell;
+      const after = (n: { x: number; y: number }) => n.y > c.y || (n.y === c.y && n.x >= c.x);
+      next = direction > 0 ? (neurons.find(after) ?? neurons[0]!) : ([...neurons].reverse().find((n) => !after(n) || (n.x === c.x && n.y === c.y)) ?? neurons[neurons.length - 1]!);
+    } else next = direction > 0 ? neurons[0]! : neurons[neurons.length - 1]!;
+    this.selectNeuron(next.id);
+  }
+
+  /** Select one neuron from the keyboard: inspect it, keep it in view and say what it is. */
+  private selectNeuron(id: string): void {
+    const n = this.store.index.byId.get(id);
+    if (!n) return;
+    const wasOpen = this.inspector.isOpen;
+    this.store.selectOnly('neuron', id);
+    if (this.keyCell || this.boardHasKeyboard) this.keyCell = { x: n.x, y: n.y };
+    // Opening the inspector reveals the selection by itself.
+    if (wasOpen) this.revealSelection();
+    this.announce(`${this.describeCell(n.x, n.y)} ${describeNeuron(n)}`);
+  }
+
+  private announceCell(): void {
+    if (this.keyCell) this.announce(this.describeCell(this.keyCell.x, this.keyCell.y));
+  }
+
+  /** "Neuron “7”, cell 3, 4." or "Empty cell 3, 4: 1 to 6 place a neuron." */
+  private describeCell(x: number, y: number): string {
+    const n = this.store.index.byCell.get(cellKey(x, y));
+    if (!n) return `Empty cell ${x}, ${y}. Press 1 to 6 or Enter to place a ${KIND_INFO[this.store.kind].name}.`;
+    return `${KIND_INFO[n.kind].name}${n.label ? ` “${n.label}”` : ''}, cell ${x}, ${y}.`;
+  }
+
+  private cellInView(c: { x: number; y: number }): boolean {
+    const p = this.camera.toScreen(c.x + 0.5, c.y + 0.5);
+    const { dx, dy } = revealOffset(p, this.measureChrome(), 0);
+    return dx === 0 && dy === 0;
+  }
+
+  /** The cell at the middle of the free part of the board. */
+  private freeCenterCell(): { x: number; y: number } {
+    const c = this.measureChrome();
+    const w = this.camera.toWorld((c.left + c.right) / 2, (c.top + c.bottom) / 2);
+    return { x: Math.floor(w.x), y: Math.floor(w.y) };
   }
 
   private installDragAndDrop(): void {
@@ -1039,7 +1312,12 @@ export class App implements BoardHost {
 
   /** Browsers only allow audio after a user gesture: unlock on the first one. */
   private installAudioUnlock(): void {
-    const unlock = () => this.synth.unlock();
+    const unlock = () => {
+      if (!this.synth.locked) return;
+      this.synth.unlock();
+      // The "tap anywhere for sound" toast has done its job once audio runs.
+      window.setTimeout(() => !this.synth.locked && this.toasts.dismiss('sound'), 150);
+    };
     window.addEventListener('pointerdown', unlock, { capture: true });
     window.addEventListener('keydown', unlock, { capture: true });
   }
@@ -1052,7 +1330,11 @@ export class App implements BoardHost {
       { class: 'stage-hint-card' },
       h('span', { class: 'stage-hint-mark', html: icons.logo, 'aria-hidden': 'true' }),
       h('h2', { text: 'An empty board' }),
-      h('p', { text: 'Pick a neuron kind from the tools (keys 1–6) and click the grid to place it. Drag from one neuron to another to connect them.' }),
+      h('p', {
+        text: matchMedia('(pointer: coarse)').matches
+          ? 'Pick a neuron kind in the dock below, then tap the grid to place it. Drag from a neuron’s handle to another neuron to connect them.'
+          : 'Pick a neuron kind from the tools (keys 1–6) and click the grid to place it. Drag from one neuron to another to connect them.',
+      }),
       h(
         'div',
         { class: 'row' },
@@ -1065,7 +1347,9 @@ export class App implements BoardHost {
 
   private updateStageHint(): void {
     const empty = !this.store.network.neurons.length && !this.store.network.texts?.length;
-    this.stageHint.hidden = !empty;
+    // Once a kind is picked the card has done its job; the hint line takes
+    // over, and the card's buttons no longer sit where the first tap goes.
+    this.stageHint.hidden = !empty || this.store.tool === 'place';
     const undo = this.stageHint.querySelector<HTMLButtonElement>('.row button:last-child');
     if (undo) undo.hidden = !this.store.history.canUndo;
   }

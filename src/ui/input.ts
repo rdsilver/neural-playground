@@ -40,7 +40,12 @@ type Gesture =
   /** menuAt: where a right-button press started, until it moves (then it is just a pan). */
   | { type: 'pan'; last: Point; menuAt?: Point }
   | { type: 'pinch'; mid: Point; dist: number }
-  | { type: 'move'; from: Point; startCell: Point; press: Press }
+  /**
+   * Dragging items. What moves is decided when the drag starts, but the
+   * selection only changes once something actually moves: a sloppy tap on a
+   * calculator key is still a plain poke.
+   */
+  | { type: 'move'; from: Point; startCell: Point; press: Press; neurons: ReadonlySet<string>; texts: ReadonlySet<string>; select: boolean }
   | { type: 'connect'; from: string; press: Press }
   | { type: 'marquee'; start: Point; additive: boolean };
 
@@ -78,6 +83,11 @@ export class BoardInput {
       }
     });
     canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+    // A tap's compatibility mouse events and click arrive after the board
+    // has acted on it, at the same spot: if the tap opened something there
+    // (the inspector sheet, a menu) the click would press whatever button
+    // it landed on. The board handles touches itself, so drop them.
+    canvas.addEventListener('touchend', (e) => e.cancelable && e.preventDefault(), { passive: false });
     canvas.addEventListener('dblclick', (e) => {
       const hit = this.hitTest(this.local(e));
       if (hit.type === 'text') this.host.editText(hit.id);
@@ -167,14 +177,15 @@ export class BoardInput {
       const tol = Math.max(5, Math.min(9, cam.scale * 0.15)) / cam.scale;
       let best: { from: string; to: string } | null = null;
       let bestD = tol;
-      for (const [key, path] of this.renderer.paths(this.store.network, index).byKey) {
-        if (w.x < Math.min(path.x0, path.cx, path.x1) - tol || w.x > Math.max(path.x0, path.cx, path.x1) + tol) continue;
-        if (w.y < Math.min(path.y0, path.cy, path.y1) - tol || w.y > Math.max(path.y0, path.cy, path.y1) + tol) continue;
-        const d = distanceToPath(path, w.x, w.y);
-        if (d < bestD) {
-          bestD = d;
-          const [from, to] = key.split('>') as [string, string];
-          best = { from, to };
+      for (const [from, targets] of this.renderer.paths(this.store.network, index).byFrom) {
+        for (const [to, path] of targets) {
+          if (w.x < Math.min(path.x0, path.cx, path.x1) - tol || w.x > Math.max(path.x0, path.cx, path.x1) + tol) continue;
+          if (w.y < Math.min(path.y0, path.cy, path.y1) - tol || w.y > Math.max(path.y0, path.cy, path.y1) + tol) continue;
+          const d = distanceToPath(path, w.x, w.y);
+          if (d < bestD) {
+            bestD = d;
+            best = { from, to };
+          }
         }
       }
       if (best) return { type: 'connection', ...best };
@@ -289,12 +300,11 @@ export class BoardInput {
         const dx = Math.floor(w.x) - g.startCell.x;
         const dy = Math.floor(w.y) - g.startCell.y;
         // Texts follow the pointer in half-cell steps when moved on their own.
-        const onlyTexts = this.store.selection.neurons.size === 0;
+        const onlyTexts = g.neurons.size === 0;
         const tdx = onlyTexts ? Math.round((w.x - g.from.x) * 2) / 2 : dx;
         const tdy = onlyTexts ? Math.round((w.y - g.from.y) * 2) / 2 : dy;
-        const sel = this.store.selection;
-        const valid = canMove(this.store.network, sel.neurons, dx, dy);
-        this.preview = { type: 'move', dx: tdx, dy: tdy, neurons: sel.neurons, texts: sel.texts, valid };
+        const valid = canMove(this.store.network, g.neurons, dx, dy);
+        this.preview = { type: 'move', dx: tdx, dy: tdy, neurons: g.neurons, texts: g.texts, valid };
         this.host.invalidate();
         return;
       }
@@ -330,12 +340,16 @@ export class BoardInput {
     if ((hit.type === 'neuron' && tool === 'select') || (hit.type === 'text' && (tool === 'select' || tool === 'text'))) {
       const sel = this.store.selection;
       const selected = hit.type === 'neuron' ? sel.neurons.has(hit.id) : sel.texts.has(hit.id);
+      // Drag the selection it belongs to; otherwise just this item (Shift: add it).
+      let neurons: ReadonlySet<string> = sel.neurons;
+      let texts: ReadonlySet<string> = sel.texts;
       if (!selected) {
-        if (g.shift) this.store.toggleSelected(hit.type, hit.id);
-        else this.store.selectOnly(hit.type, hit.id);
+        const base = g.shift ? sel : { neurons: new Set<string>(), texts: new Set<string>() };
+        neurons = hit.type === 'neuron' ? new Set([...base.neurons, hit.id]) : new Set(base.neurons);
+        texts = hit.type === 'text' ? new Set([...base.texts, hit.id]) : new Set(base.texts);
       }
       const from = this.camera.toWorld(g.start.x, g.start.y);
-      this.gesture = { type: 'move', from, startCell: { x: Math.floor(from.x), y: Math.floor(from.y) }, press: g };
+      this.gesture = { type: 'move', from, startCell: { x: Math.floor(from.x), y: Math.floor(from.y) }, press: g, neurons, texts, select: !selected };
       this.updateCursor();
       this.onMove(e);
       return;
@@ -381,9 +395,13 @@ export class BoardInput {
     if (g?.type === 'press') this.click(g);
     else if (g?.type === 'pan' && g.menuAt) this.host.contextMenu(e.clientX, e.clientY, this.hitTest(g.menuAt));
     else if (g?.type === 'move' && preview?.type === 'move') {
-      if (preview.valid && (preview.dx || preview.dy)) this.host.moveSelection(preview.dx, preview.dy);
+      if (preview.valid && (preview.dx || preview.dy)) {
+        // The dragged items become the selection now that they really moved.
+        if (g.select) this.store.select({ neurons: g.neurons, texts: g.texts, connection: null });
+        this.host.moveSelection(preview.dx, preview.dy);
+      }
       // A wobble that stayed inside the cell is a click (pokes still land).
-      else if (!preview.dx && !preview.dy && !g.press.shift) this.click(g.press);
+      else if (!preview.dx && !preview.dy) this.click(g.press);
     } else if (g?.type === 'connect' && preview?.type === 'connect') {
       if (preview.target) this.host.connect(g.from, preview.target, e.shiftKey);
       else if (preview.newCell) this.host.connectToNew(g.from, preview.newCell.x, preview.newCell.y, e.shiftKey);
@@ -437,10 +455,13 @@ export class BoardInput {
     switch (hit.type) {
       case 'neuron':
       case 'handle':
-        if (g.shift && tool === 'select') store.toggleSelected('neuron', hit.id);
-        // A click while running is a poke: select quietly, without opening the inspector.
-        else store.selectOnly('neuron', hit.id, host.running);
-        if (host.running) host.poke(hit.id);
+        // Shift-click selects (and so inspects) without poking, running or not.
+        if (g.shift) store.toggleSelected('neuron', hit.id);
+        // While running a click only pokes, like pressing a key: inspecting
+        // must never change the calculation. Right-click, long-press or
+        // Shift-click inspect instead.
+        else if (host.running) host.poke(hit.id);
+        else store.selectOnly('neuron', hit.id);
         break;
       case 'text':
         if (g.shift) store.toggleSelected('text', hit.id);

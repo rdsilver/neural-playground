@@ -318,9 +318,11 @@ kbd {
     transform var(--fast) var(--ease);
 }
 
-.btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  color: var(--text);
+@media (hover: hover) {
+  .btn:hover:not(:disabled) {
+    background: var(--surface-3);
+    color: var(--text);
+  }
 }
 
 .btn:active:not(:disabled) {
@@ -353,9 +355,11 @@ kbd {
   color: var(--text);
 }
 
-.btn.outline:hover:not(:disabled) {
-  border-color: var(--text-3);
-  background: var(--surface-3);
+@media (hover: hover) {
+  .btn.outline:hover:not(:disabled) {
+    border-color: var(--text-3);
+    background: var(--surface-3);
+  }
 }
 
 .btn.primary {
@@ -364,18 +368,22 @@ kbd {
   color: var(--accent-ink);
 }
 
-.btn.primary:hover:not(:disabled) {
-  background: var(--accent-2);
-  color: var(--accent-ink);
+@media (hover: hover) {
+  .btn.primary:hover:not(:disabled) {
+    background: var(--accent-2);
+    color: var(--accent-ink);
+  }
 }
 
 .btn.ghost {
   color: var(--text-2);
 }
 
-.btn.danger:hover:not(:disabled) {
-  background: var(--danger-soft);
-  color: var(--danger);
+@media (hover: hover) {
+  .btn.danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
 }
 
 .btn.small {
@@ -400,8 +408,10 @@ kbd {
   font-weight: 600;
 }
 
-.link-btn:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .link-btn:hover {
+    text-decoration: underline;
+  }
 }
 
 /* ---------- Top islands ---------- */
@@ -473,8 +483,10 @@ kbd {
   transition: background var(--fast);
 }
 
-.doc-btn:hover:not(:disabled) {
-  background: var(--surface-3);
+@media (hover: hover) {
+  .doc-btn:hover:not(:disabled) {
+    background: var(--surface-3);
+  }
 }
 
 .doc-btn:disabled {
@@ -632,9 +644,14 @@ kbd {
   text-align: left;
 }
 
-.kind-row:hover,
 .kind-row:focus-visible {
   background: var(--surface-3);
+}
+
+@media (hover: hover) {
+  .kind-row:hover {
+    background: var(--surface-3);
+  }
 }
 
 .kind-row[aria-pressed='true'] {
@@ -703,9 +720,11 @@ kbd {
     color var(--fast);
 }
 
-.rail-btn:hover {
-  background: var(--surface-3);
-  color: var(--text);
+@media (hover: hover) {
+  .rail-btn:hover {
+    background: var(--surface-3);
+    color: var(--text);
+  }
 }
 
 .rail-btn[aria-pressed='true'] {
@@ -780,9 +799,11 @@ kbd {
   box-shadow: 0 4px 14px -4px color-mix(in srgb, var(--accent) 70%, transparent);
 }
 
-.play-btn.btn.icon-btn:hover:not(:disabled) {
-  background: var(--accent-2);
-  color: var(--accent-ink);
+@media (hover: hover) {
+  .play-btn.btn.icon-btn:hover:not(:disabled) {
+    background: var(--accent-2);
+    color: var(--accent-ink);
+  }
 }
 
 .play-btn:active {
@@ -814,8 +835,10 @@ kbd {
   cursor: pointer;
 }
 
-.speed-select:hover {
-  border-color: var(--line-2);
+@media (hover: hover) {
+  .speed-select:hover {
+    border-color: var(--line-2);
+  }
 }
 
 .speed-select option {
@@ -877,9 +900,11 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
-.zoom-val:hover {
-  background: var(--surface-3);
-  color: var(--text);
+@media (hover: hover) {
+  .zoom-val:hover {
+    background: var(--surface-3);
+    color: var(--text);
+  }
 }
 
 /* ---------- Notes card ---------- */
@@ -1044,8 +1069,10 @@ kbd {
   transition: background var(--fast);
 }
 
-.try-list label:hover {
-  background: var(--surface-2);
+@media (hover: hover) {
+  .try-list label:hover {
+    background: var(--surface-2);
+  }
 }
 
 .try-list input {
@@ -1189,8 +1216,10 @@ kbd {
   animation: card-in 200ms var(--ease);
 }
 
-.card-pill:hover {
-  border-color: var(--line-2);
+@media (hover: hover) {
+  .card-pill:hover {
+    border-color: var(--line-2);
+  }
 }
 
 .pill-eyebrow {
@@ -1489,6 +1518,18 @@ kbd {
   scrollbar-color: var(--line-2) transparent;
 }
 
+/* What the selected neuron does, in plain words. */
+.insp-desc {
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
 .insp-sec-head {
   display: flex;
   align-items: center;
@@ -1547,8 +1588,10 @@ kbd {
   transition: border-color var(--fast);
 }
 
-.input:hover {
-  border-color: var(--text-3);
+@media (hover: hover) {
+  .input:hover {
+    border-color: var(--text-3);
+  }
 }
 
 .input:focus {
@@ -1633,8 +1676,10 @@ textarea.input {
   font-weight: 550;
 }
 
-.seg button:hover {
-  color: var(--text);
+@media (hover: hover) {
+  .seg button:hover {
+    color: var(--text);
+  }
 }
 
 .seg button[aria-pressed='true'] {
@@ -1663,9 +1708,11 @@ textarea.input {
   font-weight: 550;
 }
 
-.kind-grid button:hover {
-  border-color: var(--line-2);
-  color: var(--text);
+@media (hover: hover) {
+  .kind-grid button:hover {
+    border-color: var(--line-2);
+    color: var(--text);
+  }
 }
 
 .kind-grid button[aria-pressed='true'] {
@@ -2114,9 +2161,11 @@ dialog::backdrop {
     color var(--fast);
 }
 
-.cat-chip:hover:not(:disabled) {
-  background: var(--surface-3);
-  color: var(--text);
+@media (hover: hover) {
+  .cat-chip:hover:not(:disabled) {
+    background: var(--surface-3);
+    color: var(--text);
+  }
 }
 
 .cat-chip:disabled {
@@ -2185,10 +2234,12 @@ dialog::backdrop {
     box-shadow var(--med);
 }
 
-.ex-card:hover {
-  border-color: var(--line-2);
-  box-shadow: 0 14px 30px -16px rgba(0, 0, 0, 0.55);
-  transform: translateY(-2px);
+@media (hover: hover) {
+  .ex-card:hover {
+    border-color: var(--line-2);
+    box-shadow: 0 14px 30px -16px rgba(0, 0, 0, 0.55);
+    transform: translateY(-2px);
+  }
 }
 
 .ex-card.current {
@@ -2363,6 +2414,48 @@ dialog::backdrop {
   margin: 0 0 10px;
   color: var(--text-2);
   line-height: 1.55;
+}
+
+/* Collect / Fire / Travel: the model as three numbered cards. */
+.model-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.model-step {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  column-gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.model-num {
+  grid-row: span 2;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.model-step b {
+  font-size: 14px;
+}
+
+.model-step span:last-child {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .legend {
@@ -2548,10 +2641,16 @@ dialog.palette[open] {
   text-align: left;
 }
 
-.menu button:hover:not(:disabled),
 .menu button:focus-visible {
   background: var(--surface-3);
   outline: none;
+}
+
+@media (hover: hover) {
+  .menu button:hover:not(:disabled) {
+    background: var(--surface-3);
+    outline: none;
+  }
 }
 
 .menu button:disabled {

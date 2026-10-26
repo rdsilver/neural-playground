@@ -5,7 +5,13 @@
 import { KIND_INFO, type ConnectionSpec, type Network, type NeuronKind, type NeuronSpec, type TextSpec } from '../engine';
 
 export const cellKey = (x: number, y: number) => `${x},${y}`;
-export const pairKey = (from: string, to: string) => `${from}>${to}`;
+/**
+ * Lookup key for a directed connection. Ids may contain any printable
+ * character (imports and links accept arbitrary strings), so the separator
+ * is NUL: 'a>b' -> 'c' and 'a' -> 'b>c' must never share a key. Keys are
+ * only ever compared, never split back into ids.
+ */
+export const pairKey = (from: string, to: string) => `${from}\u0000${to}`;
 
 /** Lookup tables for a network, rebuilt whenever it changes. */
 export interface NetIndex {

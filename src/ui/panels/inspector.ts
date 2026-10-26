@@ -1,14 +1,15 @@
 // The inspector: a floating panel on the right with the properties of
 // whatever is selected. It slides in when something is selected and away
-// when the selection is cleared; a neuron that was only poked (clicked while
-// the simulation runs) is selected quietly, without opening it. Rebuilt on
-// every change (it is small), keeping focus and scroll position so typing is
-// never disturbed. On phones it is a bottom sheet above the dock.
+// when the selection is cleared (a click on a running neuron pokes it
+// without selecting it, so poking never opens this). Rebuilt on every change
+// (it is small), keeping focus and scroll position so typing is never
+// disturbed. On phones it is a bottom sheet above the dock.
 
 import { KIND_INFO, NEURON_KINDS, noteName, TICKS_PER_SECOND, travelTicks, type NeuronKind, type NeuronSpec, type TextSpec } from '../../engine';
 import type { App } from '../app';
 import { h } from '../dom';
 import { icons } from '../icons';
+import { describeNeuron } from '../describe';
 import { BLACK_KEYS, parseNote } from '../music';
 import { deleteItems, pairKey, reverseConnection, setTwoWay, updateNeuron, updateText } from '../netops';
 import { drawKindIcon } from '../renderer';
@@ -38,10 +39,10 @@ export class Inspector {
     this.el.inert = true;
 
     app.store.on('selection', () => {
-      const size = selectionSize(app.store.selection);
-      if (!size) this.setOpen(false);
-      else if (!app.store.selectionQuiet) this.setOpen(true);
-      if (this.open) this.render();
+      const wasOpen = this.open;
+      this.setOpen(selectionSize(app.store.selection) > 0);
+      // (Opening renders by itself.)
+      if (wasOpen && this.open) this.render();
     });
     app.store.on('network', () => {
       if (this.open) this.render();
@@ -58,6 +59,9 @@ export class Inspector {
     if (open === this.open) return;
     this.open = open;
     if (open) this.render();
+    // Closing with focus inside (Escape, the close button, Delete): hand
+    // keyboard focus back to the board instead of losing it to the page.
+    else if (this.el.contains(document.activeElement)) this.app.canvas.focus({ preventScroll: true });
     this.el.classList.toggle('open', open);
     this.el.inert = !open;
     this.el.setAttribute('aria-hidden', String(!open));
@@ -183,7 +187,11 @@ export class Inspector {
     const app = this.app;
     const edit = (patch: Parameters<typeof updateNeuron>[2], label: string, key?: string) => app.updateNeuron(n.id, patch, label, key && `${key}:${n.id}`);
 
-    const body: HTMLElement[] = [stacked('Kind', this.kindGrid('kind', n.kind, (k) => k !== n.kind && edit({ kind: k }, `Change to ${KIND_INFO[k].name.toLowerCase()}`)))];
+    // What it does, in plain words, before any of the numbers.
+    const body: HTMLElement[] = [
+      h('p', { class: 'insp-desc', text: describeNeuron(n) }),
+      stacked('Kind', this.kindGrid('kind', n.kind, (k) => k !== n.kind && edit({ kind: k }, `Change to ${KIND_INFO[k].name.toLowerCase()}`))),
+    ];
     body.push(
       prop('Label', textInput('label', 'Label', n.label ?? '', n.kind === 'character' ? 'Shown under the digit' : 'Text on the neuron', 12, (v) => edit({ label: v }, 'Edit label', 'label')), undefined, 'f-label'),
     );
@@ -205,11 +213,20 @@ export class Inspector {
         );
       }
     } else {
+      const digit = n.kind === 'character';
       body.push(
         prop(
-          'Threshold',
-          stepper({ field: 'threshold', label: 'Threshold', value: n.threshold, step: 1, min: 1, max: 9999, onChange: (v) => edit({ threshold: Math.round(v) }, 'Change threshold', 'threshold') }),
-          n.kind === 'character' ? 'The base it counts in: it carries at this charge.' : 'Charge needed to fire.',
+          digit ? 'Base' : 'Threshold',
+          stepper({
+            field: 'threshold',
+            label: digit ? 'Base (carries at this count)' : 'Threshold',
+            value: n.threshold,
+            step: 1,
+            min: 1,
+            max: 9999,
+            onChange: (v) => edit({ threshold: Math.round(v) }, digit ? 'Change base' : 'Change threshold', 'threshold'),
+          }),
+          digit ? 'It carries when its count reaches this: 10 counts in decimal.' : 'Charge it needs to fire.',
           'f-threshold',
         ),
       );

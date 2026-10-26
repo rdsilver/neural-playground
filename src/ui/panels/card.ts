@@ -31,6 +31,7 @@ export class ExampleCard {
   private statsOpen = false;
   private liveStats: (() => void) | null = null;
   private readonly phone = matchMedia('(max-width: 760px)');
+  private readonly coarse = matchMedia('(pointer: coarse)');
 
   constructor(private readonly app: App) {
     // detail === 0: a click from the keyboard, so focus follows into the card.
@@ -195,18 +196,25 @@ export class ExampleCard {
     this.pillCount.hidden = false;
     const tip = (keys: string[], text: string) => h('li', {}, h('span', { class: 'tip-keys' }, ...keys.map((k) => h('kbd', { text: k }))), h('span', { text }));
     const mod = app.isMac ? '⌘' : 'Ctrl';
+    // Touch screens get gestures; keyboards and mice get their shortcuts.
+    const tips = this.coarse.matches
+      ? [
+          tip(['Tap'], 'a neuron while it runs to poke it (+1 charge)'),
+          tip(['Hold'], 'a neuron to inspect it'),
+          tip(['Kind'], 'pick one in the dock, then tap the grid'),
+          tip(['Drag'], 'from a neuron’s handle to connect it'),
+        ]
+      : [
+          tip(['Click'], 'a neuron while it runs to poke it (+1 charge)'),
+          tip(['⇧', 'Click'], 'or right-click to inspect it'),
+          tip(['1', '–', '6'], 'pick a neuron kind, then click the grid'),
+          tip(['Drag'], 'from a neuron’s handle to connect it'),
+          tip([mod, 'K'], 'search every command'),
+        ];
     this.scroll.replaceChildren(
       this.header('Your network', doc.title),
       h('p', { class: 'card-summary', text: 'Saved in this browser as you work. Share a link to it, or export it as JSON, from the top right.' }),
-      h(
-        'ul',
-        { class: 'tips' },
-        tip(['Click'], 'a neuron while running to poke it (+1 charge)'),
-        tip(['1', '–', '6'], 'pick a neuron kind, then click the grid'),
-        tip(['Drag'], 'from a neuron’s handle to connect it'),
-        tip(['Space'], 'play or pause · drag empty space to pan'),
-        tip([mod, 'K'], 'search every command'),
-      ),
+      h('ul', { class: 'tips' }, ...tips),
       this.stats(),
     );
     this.footer.replaceChildren(h('button', { class: 'btn outline', type: 'button', onclick: () => app.openGallery() }, h('span', { html: icons.examples }), 'Browse examples'));

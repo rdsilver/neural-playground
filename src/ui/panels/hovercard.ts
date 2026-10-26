@@ -1,6 +1,7 @@
 // A small live readout that appears above a neuron after hovering it for a
 // moment: kind, charge against threshold (or a timer's countdown), fire
-// count, and what clicking will do. Mouse only.
+// count, and what clicking will do (poke while running, inspect while
+// paused). Mouse only.
 
 import { KIND_INFO, noteName, TICKS_PER_SECOND } from '../../engine';
 import type { App } from '../app';
@@ -24,7 +25,10 @@ export class HoverCard {
   update(now: number): void {
     const { input, store, camera, runner } = this.app;
     const hover = input.hover;
-    const id = hover?.type === 'neuron' && !input.busy ? hover.id : null;
+    let id = hover?.type === 'neuron' && !input.busy ? hover.id : null;
+    // The open inspector already shows the selected neuron (and the card
+    // would slide under it when the neuron sits next to the panel).
+    if (id && this.app.inspector.isOpen && store.selection.neurons.has(id)) id = null;
     if (id !== this.id) {
       this.id = id;
       this.since = now;
@@ -46,8 +50,12 @@ export class HoverCard {
       detail = `charge ${st?.charge ?? 0} / ${n.threshold} · fired ${st?.fireCount ?? 0}×`;
       if (n.kind === 'note') detail = `${noteName(n.note ?? 60)} · ${detail}`;
     }
-    const hint =
-      store.tool === 'hand' || runner.playing ? (n.kind === 'timer' ? 'Timers ignore pokes' : 'Click to poke (+1)') : store.tool === 'select' ? 'Drag to move · drag the dot to connect' : '';
+    // What a click does here: poke while running (Shift-click or right-click
+    // to inspect instead), inspect while paused.
+    let hint = '';
+    if (store.tool === 'hand') hint = n.kind === 'timer' ? 'Timers fire on their own' : 'Click to poke (+1)';
+    else if (runner.playing) hint = n.kind === 'timer' ? 'Fires on its own · Shift-click to inspect' : 'Click to poke (+1) · Shift-click to inspect';
+    else if (store.tool === 'select') hint = 'Click to inspect · drag to move';
     const title = `${info.name}${n.label ? ` “${n.label}”` : ''}`;
     const text = `${title}|${detail}|${hint}`;
     if (text !== this.text) {

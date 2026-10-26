@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NetworkBuilder, TICKS_PER_SECOND } from '../engine';
-import { clampSpeed, DEMO_CAPTION_TAIL, formatSimTime, formatSpeed, MAX_PULSES, MAX_TICKS_PER_FRAME, nudgeSpeed, Runner } from './runner';
+import { clampSpeed, DEMO_CAPTION_TAIL, demoBeats, formatSimTime, formatSpeed, MAX_PULSES, MAX_TICKS_PER_FRAME, nudgeSpeed, Runner, STEP_JUMP_TICKS, STEP_MIN_SPEED } from './runner';
 
 function relay() {
   const b = new NetworkBuilder();
@@ -130,10 +130,136 @@ describe('Runner', () => {
     expect(r.upcomingTaps(1000)).toEqual([]);
   });
 
-  it('steps to the next fire', () => {
+  it('animates a step to the next event and pauses there', () => {
     const r = new Runner(relay());
-    const events = r.stepToNextFire();
-    expect(events.map((e) => e.neuron)).toEqual(['clock']);
+    r.playing = true;
+    // The timer fires on tick 1.
+    expect(r.beginStep()).toEqual([]);
+    expect(r.playing).toBe(false);
+    expect(r.stepping).toMatchObject({ mode: 'event', until: 1 });
+    const ends: boolean[] = [];
+    r.onStepEnd = (found) => ends.push(found);
+    expect(r.advance(1 / 60).map((e) => e.neuron)).toEqual(['clock']);
+    expect(r.stepping).toBeNull();
+    expect(ends).toEqual([true]);
+    // Next: the pulse lands on 'a', four cells (60 ticks) later, as the timer fires again.
+    r.beginStep();
+    expect(r.stepping!.until).toBe(61);
+    expect(r.stepping!.speed).toBeGreaterThanOrEqual(STEP_MIN_SPEED);
+    const fires: string[] = [];
+    for (let i = 0; i < 60 && r.stepping; i++) fires.push(...r.advance(1 / 60).map((e) => e.neuron));
+    expect(r.sim.tick).toBe(61);
+    expect(fires).toEqual(['a', 'clock']);
+    // It glides: part-way through, the drawn tick is between whole ticks.
+    r.beginStep();
+    r.advance(0.004);
+    expect(r.renderTick).toBeGreaterThan(r.sim.tick);
+  });
+
+  it('finishes a step at once when stepping again, and steps single ticks', () => {
+    const r = new Runner(relay());
+    r.beginStep();
+    r.beginStep();
+    // The first step (the timer fire on tick 1) was completed instantly.
+    expect(r.sim.tick).toBe(1);
+    expect(r.stepping!.until).toBe(61);
+    r.step();
+    expect(r.stepping).toBeNull();
+    expect(r.sim.tick).toBe(2);
+  });
+
+  it('steps to the next fire, and reports when nothing fires', () => {
+    const r = new Runner(relay());
+    r.sim.step(); // the timer fires; its pulse is in flight
+    r.beginStep('fire');
+    expect(r.finishStep().map((e) => e.neuron)).toEqual(['a', 'clock']);
+    expect(r.sim.tick).toBe(61);
+
+    const quiet = new NetworkBuilder();
+    quiet.normal(0, 0, 1, { id: 'lonely' });
+    const q = new Runner(quiet.build());
+    expect(q.beginStep()).toBeNull();
+    expect(q.beginStep('fire')).toBeNull();
+    // A pulse that lands without firing anything: the fire-step gives up.
+    const b = new NetworkBuilder();
+    b.normal(0, 0, 1, { id: 'x' });
+    b.normal(1, 0, 5, { id: 'y' });
+    b.connect('x', 'y');
+    const g = new Runner(b.build());
+    g.sim.stimulate('x');
+    const found: boolean[] = [];
+    g.onStepEnd = (f) => found.push(f);
+    g.beginStep('fire');
+    expect(g.finishStep()).toEqual([]);
+    expect(found).toEqual([false]);
+    expect(g.sim.tick).toBe(10 * TICKS_PER_SECOND);
+  });
+
+  it('jumps straight to an event that is far away', () => {
+    const b = new NetworkBuilder();
+    b.timer(0, 0, { id: 'slow', interval: 60 });
+    const r = new Runner(b.build());
+    r.beginStep();
+    r.advance(1 / 60);
+    expect(r.sim.tick).toBe(1);
+    const fired = r.beginStep()!;
+    expect(r.stepping).toBeNull();
+    expect(r.sim.tick).toBe(1 + 60 * TICKS_PER_SECOND);
+    expect(fired.map((e) => e.neuron)).toEqual(['slow']);
+    expect(STEP_JUMP_TICKS).toBeLessThan(60 * TICKS_PER_SECOND);
+  });
+
+  it('cancels an animated step on reset', () => {
+    const r = new Runner(relay());
+    r.beginStep();
+    r.reset();
+    expect(r.stepping).toBeNull();
+    expect(r.advance(1)).toEqual([]);
+  });
+
+  it('counts demo progress in beats, so pairs and caption-only steps count once', () => {
+    expect(demoBeats([{ at: 2 }, { at: 0.5, neuron: 'a' }, { at: 0.5, neuron: 'b' }, { at: 2, caption: 'x' }])).toEqual([0.5, 2]);
+    const r = new Runner(relay());
+    r.startDemo([
+      { at: 0.5, neuron: 'a', caption: 'press' },
+      { at: 0.5, neuron: 'clock' },
+      { at: 1, caption: 'caption only' },
+      { at: 3, caption: 'the end' },
+    ]);
+    expect(r.demoProgress).toEqual({ done: 0, total: 3 });
+    r.sim.runSeconds(1);
+    expect(r.demoProgress).toEqual({ done: 2, total: 3 });
+    expect(r.caption).toBe('caption only');
+    expect(r.demoEndsAt).toBe(3);
+    // Only the presses are scheduled, so the ghost finger never sees the captions.
+    expect(r.sim.pendingStimuli()).toHaveLength(0);
+  });
+
+  it('starts clean when a different document opens (undo/redo across an example load)', () => {
+    const r = new Runner(relay());
+    r.startDemo([
+      { at: 0.5, caption: 'caption only' },
+      { at: 1, neuron: 'a', caption: 'press' },
+    ]);
+    r.playing = true;
+    for (let i = 0; i < 70; i++) r.advance(1 / 60);
+    expect(r.caption).toBe('press');
+    r.sim.stimulate('a', -3);
+    r.beginStep();
+    // Same ids, different document: no charge, caption, demo or step carries over.
+    r.open(relay());
+    expect(r.sim.tick).toBe(0);
+    expect(r.sim.charge('a')).toBe(0);
+    expect(r.demo).toBeNull();
+    expect(r.caption).toBeUndefined();
+    expect(r.demoLive).toBe(false);
+    expect(r.demoProgress).toBeNull();
+    expect(r.sim.pendingStimuli()).toHaveLength(0);
+    expect(r.taps).toEqual([]);
+    expect(r.stepping).toBeNull();
+    // A reset afterwards does not bring the old demo back.
+    r.reset();
+    expect(r.sim.pendingStimuli()).toHaveLength(0);
   });
 });
 

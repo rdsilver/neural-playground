@@ -1,5 +1,5 @@
-// Help overlay: how the model works, a legend of neuron kinds, and every
-// mouse, touch and keyboard control.
+// Help overlay: the model in three steps (collect, fire, travel), a legend
+// of neuron kinds, and every mouse, touch and keyboard control.
 
 import { KIND_INFO, NEURON_KINDS } from '../../engine';
 import type { App } from '../app';
@@ -8,7 +8,42 @@ import { icons } from '../icons';
 import { drawKindIcon } from '../renderer';
 import { formatKeys } from '../shortcuts';
 
-const SHORTCUTS = ['play', 'step', 'step-fire', 'reset', 'faster', 'slower', 'select', 'connect', 'text', 'hand', 'poke', 'fire', 'undo', 'redo', 'delete', 'duplicate', 'fit', 'zoom-in', 'zoom-out', 'mute', 'examples', 'export', 'import', 'palette'];
+const SHORTCUTS = [
+  'play',
+  'step',
+  'step-tick',
+  'step-fire',
+  'reset',
+  'faster',
+  'slower',
+  'next-neuron',
+  'prev-neuron',
+  'poke',
+  'fire',
+  'select',
+  'connect',
+  'text',
+  'hand',
+  'undo',
+  'redo',
+  'delete',
+  'duplicate',
+  'fit',
+  'zoom-in',
+  'zoom-out',
+  'mute',
+  'examples',
+  'export',
+  'import',
+  'palette',
+];
+
+/** The whole model, in three steps. */
+const MODEL: [string, string][] = [
+  ['Collect', 'Every pulse that arrives adds 1 charge to a neuron. A pulse from an Inhibitor takes 1 away.'],
+  ['Fire', 'When its charge reaches its threshold, the neuron fires: the charge resets to zero and a pulse leaves along every outgoing arrow.'],
+  ['Travel', 'Pulses travel four cells per second, so the distance between two neurons is a delay: the layout of a circuit is its timing.'],
+];
 
 export class HelpDialog {
   readonly el: HTMLDialogElement;
@@ -31,22 +66,24 @@ export class HelpDialog {
       const c = app.commands.find((x) => x.id === id);
       if (c?.keys) row(c.title, c.keys.split(' ').slice(0, 2));
     }
-    row('Move selection / pan', ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'], ' ');
+    row('Move selection, or the cell cursor', ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'], ' ');
+    row('At the cell cursor: place a kind', ['1', '6'], ' – ');
+    row('At the cell cursor: select or place', ['enter']);
     row('Context menu', ['shift+f10']);
     row('Cancel / deselect', ['escape']);
 
     const mouse = h('dl', { class: 'keys gestures' });
     const pair = (a: string, b: string) => mouse.append(h('dt', { text: a }), h('dd', { class: 'muted', text: b }));
+    pair('Poke', 'click (tap) a neuron while it runs: +1 charge, like pressing a key');
+    pair('Inspect', 'click it while paused, or Shift-click, right-click or long-press it any time');
     pair('Place', 'pick a kind, click an empty cell');
-    pair('Poke', 'click a neuron while running');
     pair('Connect', 'drag from a neuron’s handle (or with the Connect tool)');
     pair('Two-way', 'hold Shift while connecting');
     pair('Move', 'drag a neuron; Shift-drag empty space to box-select');
     pair('Pan', 'drag empty space, right or middle mouse, or Space + drag');
     pair('Zoom', 'scroll, pinch, or the buttons bottom left');
-    pair('Inspect', 'right-click (or long-press) a neuron, wire or note');
     pair('Menu', 'right-click a neuron, wire or empty cell (long-press empty board on touch)');
-    pair('Touch', 'tap to place or poke, drag to pan, pinch to zoom');
+    pair('Step', 'Step runs to the next pulse or fire; Shift-click it for one tick');
 
     this.el = h(
       'dialog',
@@ -63,9 +100,12 @@ export class HelpDialog {
             'div',
             {},
             h('h3', { text: 'The model' }),
-            h('p', { text: 'Each neuron collects charge. When its charge reaches its threshold it fires: its charge resets to zero and it sends a pulse down every outgoing connection (the arrows).' }),
-            h('p', { text: 'Pulses are not instant. They travel at four cells per second, so the distance between two neurons is a delay: layout is timing. When a pulse arrives it adds +1 charge to its target, or −1 if it came from an Inhibitor.' }),
-            h('p', { text: 'Timers fire on their own, and you can poke any neuron yourself by clicking it while the simulation runs. From these few rules you can build counters, clocks, melodies and calculators.' }),
+            h(
+              'ol',
+              { class: 'model-steps' },
+              ...MODEL.map(([title, text], i) => h('li', { class: 'model-step' }, h('span', { class: 'model-num', text: String(i + 1), 'aria-hidden': 'true' }), h('b', { text: title }), h('span', { text }))),
+            ),
+            h('p', { class: 'muted', text: 'Timers fire on their own, and you can poke any neuron yourself by clicking it while the simulation runs. From these few rules come counters, clocks, melodies and calculators.' }),
             h('h3', { text: 'Neuron kinds' }),
             this.legend,
           ),
