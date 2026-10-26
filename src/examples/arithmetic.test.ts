@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Simulation, TICKS_PER_SECOND, travelTicks, type Network, type NeuronSpec } from '../engine';
+import { mulberry32 } from '../engine/rng';
 import { BITS, DIVISORS, TIMES_TABLE_COUNT, TIMES_TABLE_INTERVAL } from './arithmetic';
 import { findExample, scheduleDemo } from './index';
 
@@ -101,6 +102,52 @@ function clickPlan(entries: Array<[number, string]>): Map<number, string[]> {
   return plan;
 }
 
+/**
+ * A seeded storm of clicks on any of `targets` before `horizon`: single
+ * clicks, bursts on consecutive ticks, and several clicks on the same tick.
+ */
+function randomClicks(seed: number, targets: readonly string[], count: number, horizon: number): Array<[number, string]> {
+  const rng = mulberry32(seed);
+  const pick = <T>(items: readonly T[]) => items[Math.floor(rng() * items.length)]!;
+  const entries: Array<[number, string]> = [];
+  while (entries.length < count) {
+    const tick = 1 + Math.floor(rng() * horizon);
+    const id = pick(targets);
+    const style = rng();
+    if (style < 0.5) entries.push([tick, id]);
+    else if (style < 0.8) for (let i = 0; i < 2 + Math.floor(rng() * 5); i++) entries.push([tick + i, id]);
+    else for (let i = 0; i < 2 + Math.floor(rng() * 3); i++) entries.push([tick, i ? pick(targets) : id]);
+  }
+  return entries;
+}
+
+/** Demo steps as clicks, on the ticks scheduleDemo would use on a fresh run. */
+const demoClicks = (id: string): Array<[number, string]> =>
+  findExample(id)!.demo!.map((step) => [Math.max(1, Math.round(step.at * TICKS_PER_SECOND)), step.neuron]);
+
+/**
+ * A decimal counter read so that it never wraps: the value shown plus 1000
+ * for every time its hundreds digit overflowed (and lost the carry).
+ */
+const unwrapped = (sim: Simulation, prefix: string) => decimal(sim, digits3(prefix)) + 1000 * sim.state(`${prefix}-hundreds`)!.fireCount;
+
+/**
+ * Apply a storm of clicks, checking the ledger after every tick, then run
+ * until idle. Returns how many clicks landed while pulses were in flight.
+ */
+function storm(net: Network, readers: Readers, clicks: Array<[number, string]>): number {
+  const ledger = new Ledger(new Simulation(net), readers, worths(net, readers));
+  const plan = clickPlan(clicks);
+  const last = Math.max(...clicks.map(([tick]) => tick));
+  let busyClicks = 0;
+  while (ledger.sim.tick < last) {
+    if (ledger.sim.pulses().length > 0) busyClicks += plan.get(ledger.sim.tick + 1)?.length ?? 0;
+    ledger.runTo(ledger.sim.tick + 1, plan);
+  }
+  while (!ledger.sim.isIdle()) ledger.step();
+  return busyClicks;
+}
+
 // ---------------------------------------------------------------------------
 // Times tables
 // ---------------------------------------------------------------------------
@@ -109,7 +156,7 @@ describe('times tables', () => {
   const net = network('times-tables');
   const ks = [1, 2, 3, 4, 5, 6, 7, 8, 9];
   const row = (sim: Simulation, k: number) => decimal(sim, digits3(`x${k}`));
-  const n = (sim: Simulation) => decimal(sim, ['n-ones', 'n-tens']);
+  const n = (sim: Simulation) => decimal(sim, digits3('n'));
   const table = (sim: Simulation) => ks.map((k) => row(sim, k));
   const readers: Readers = { n, ...Object.fromEntries(ks.map((k) => [`x${k}`, (sim: Simulation) => row(sim, k)])) };
   const interval = TIMES_TABLE_INTERVAL * TICKS_PER_SECOND;
@@ -131,6 +178,63 @@ describe('times tables', () => {
         expect(n(sim)).toBe(m);
       }
     }
+  });
+
+  it('settles about 9.5 s after each tick, then stands still for over 2 s before the next', () => {
+    const sim = new Simulation(net);
+    const shown = () => [n(sim), ...table(sim)].join();
+    const changes: number[] = [];
+    let previous = shown();
+    while (!sim.isIdle()) {
+      sim.step();
+      if (shown() !== previous) changes.push(sim.tick);
+      previous = shown();
+    }
+    for (let m = 1; m <= TIMES_TABLE_COUNT; m++) {
+      const during = changes.filter((t) => t >= fireTick(m) && t < fireTick(m) + interval);
+      const settled = (during.at(-1)! - fireTick(m)) / TICKS_PER_SECOND;
+      expect(settled, `tick ${m}`).toBeGreaterThan(9);
+      expect(settled, `tick ${m}`).toBeLessThan(10);
+      expect(TIMES_TABLE_INTERVAL - settled, `rest after tick ${m}`).toBeGreaterThan(2);
+    }
+  });
+
+  it('a reset in the middle of the run starts the table over cleanly', () => {
+    const sim = new Simulation(net);
+    sim.runSeconds(50.3);
+    sim.stimulate('step');
+    sim.reset();
+    expect([n(sim), ...table(sim)]).toEqual(Array(10).fill(0));
+    sim.runUntilIdle();
+    expect(n(sim)).toBe(12);
+    expect(table(sim)).toEqual([12, 24, 36, 48, 60, 72, 84, 96, 108]);
+  });
+
+  it.each([1, 2, 3, 4, 5])('stays exact under a seeded storm of +1 clicks during the run (seed %i)', (seed) => {
+    const sim = new Simulation(net);
+    const end = fireTick(TIMES_TABLE_COUNT) + interval;
+    const plan = clickPlan(randomClicks(seed, ['step'], 40, end));
+    let clicks = 0;
+    while (sim.tick < end || !sim.isIdle()) {
+      for (const id of plan.get(sim.tick + 1) ?? []) {
+        sim.stimulate(id);
+        clicks++;
+      }
+      sim.step();
+    }
+    expect(clicks).toBeGreaterThanOrEqual(40);
+    expect(n(sim)).toBe(TIMES_TABLE_COUNT + clicks);
+    expect(table(sim)).toEqual(ks.map((k) => k * (TIMES_TABLE_COUNT + clicks)));
+  });
+
+  it.each([11, 12, 13])('never loses a pulse when any neuron is clicked at random (seed %i)', (seed) => {
+    const readers: Readers = {
+      n: (sim) => unwrapped(sim, 'n'),
+      ...Object.fromEntries(ks.map((k) => [`x${k}`, (sim: Simulation) => unwrapped(sim, `x${k}`)])),
+    };
+    const targets = net.neurons.filter((neuron) => neuron.kind !== 'timer').map((neuron) => neuron.id);
+    const busy = storm(net, readers, randomClicks(seed, targets, 150, fireTick(TIMES_TABLE_COUNT) + interval));
+    expect(busy).toBeGreaterThan(20);
   });
 
   it('ends on 12, 24, 36 … 108 and goes quiet', () => {
@@ -301,6 +405,68 @@ describe('division with remainders', () => {
     expect(shows(sim)).toEqual(exact(value));
   });
 
+  it('replays its demo exactly after a reset part-way through (as the app does on Replay)', () => {
+    const example = findExample('division-remainders')!;
+    const sim = new Simulation(net);
+    scheduleDemo(sim, example.demo!);
+    sim.runSeconds(12.3);
+    sim.stimulate('key-10-r1');
+    sim.reset();
+    scheduleDemo(sim, example.demo!);
+    sim.runUntilIdle();
+    expect(shows(sim)).toEqual(exact(23));
+  });
+
+  it('follows the demo with the tryThis presses: 24, then the primes 29, 31 and 37', () => {
+    const example = findExample('division-remainders')!;
+    const sim = new Simulation(net);
+    scheduleDemo(sim, example.demo!);
+    sim.runUntilIdle();
+    const noZero = () => DIVISORS.every((d) => remainder(sim, d) !== 0);
+    // Pressed on consecutive ticks, without waiting for the rows to settle.
+    const press = (times: number) => {
+      for (let i = 0; i < times; i++) {
+        sim.stimulate('key-1');
+        sim.step();
+      }
+      sim.runUntilIdle();
+    };
+    press(1);
+    expect(shows(sim)).toEqual(exact(24));
+    expect(noZero()).toBe(false);
+    for (const prime of [29, 31, 37]) {
+      press(prime - N(sim));
+      expect(shows(sim)).toEqual(exact(prime));
+      expect(noZero(), `N = ${prime}`).toBe(true);
+    }
+  });
+
+  it.each([1, 2, 3, 4, 5])('is exact after a seeded storm of +10 and +1 presses (seed %i)', (seed) => {
+    const sim = new Simulation(net);
+    const plan = clickPlan(randomClicks(seed, ['key-10-r1', 'key-1'], 50, 900));
+    let value = 0;
+    while (sim.tick < 900 || !sim.isIdle()) {
+      for (const id of plan.get(sim.tick + 1) ?? []) {
+        sim.stimulate(id);
+        value += id === 'key-1' ? 1 : 10;
+      }
+      sim.step();
+    }
+    expect(value).toBeGreaterThan(100);
+    expect(value).toBeLessThan(1000);
+    expect(shows(sim)).toEqual(exact(value));
+  });
+
+  it.each([11, 12, 13])('never loses a pulse when any neuron is clicked at random during the demo (seed %i)', (seed) => {
+    const readers: Readers = {
+      n: (sim) => unwrapped(sim, 'n'),
+      ...Object.fromEntries(DIVISORS.map((d) => [`÷${d}`, (sim: Simulation) => d * unwrapped(sim, `quot-${d}`) + remainder(sim, d)])),
+    };
+    const targets = net.neurons.map((neuron) => neuron.id);
+    const busy = storm(net, readers, [...demoClicks('division-remainders'), ...randomClicks(seed, targets, 150, 1500)]);
+    expect(busy).toBeGreaterThan(20);
+  });
+
   it('lags while pulses are in flight but never loses one, and is exact once settled', () => {
     const worth = worths(net, readers);
     expect(worth.get('key-10-r1')).toEqual({ n: 10, ...Object.fromEntries(DIVISORS.map((d) => [`÷${d}`, 10])) });
@@ -404,6 +570,62 @@ describe('binary to decimal', () => {
     sim.runUntilIdle();
     expect(dec(sim)).toBe(3 * 255);
     expect(binary(sim)).toBe((3 * 255) % 256);
+  });
+
+  it('replays its demo exactly after a reset part-way through (as the app does on Replay)', () => {
+    const example = findExample('binary-to-decimal')!;
+    const sim = new Simulation(net);
+    scheduleDemo(sim, example.demo!);
+    sim.runSeconds(9.2);
+    sim.stimulate('key-64');
+    sim.reset();
+    scheduleDemo(sim, example.demo!);
+    sim.runUntilIdle();
+    expect([binaryText(sim), dec(sim)]).toEqual(['11111111', 255]);
+  });
+
+  it('follows the demo with the tryThis presses: 1 wraps the byte, then 64 + 64 carries into 128', () => {
+    const example = findExample('binary-to-decimal')!;
+    const sim = new Simulation(net);
+    scheduleDemo(sim, example.demo!);
+    sim.runUntilIdle();
+    sim.stimulate('key-1');
+    sim.runUntilIdle();
+    expect([binaryText(sim), dec(sim)]).toEqual(['00000000', 256]);
+    sim.stimulate('key-64');
+    sim.step();
+    sim.stimulate('key-64');
+    sim.runUntilIdle();
+    expect([binaryText(sim), dec(sim)]).toEqual(['10000000', 384]);
+  });
+
+  it.each([1, 2, 3, 4, 5])('adds up a seeded storm of key presses exactly in both rows (seed %i)', (seed) => {
+    const sim = new Simulation(net);
+    const keys = Array.from({ length: BITS }, (_, j) => keyFor(j));
+    const plan = clickPlan(randomClicks(seed, keys, 25, 600));
+    let value = 0;
+    while (sim.tick < 600 || !sim.isIdle()) {
+      for (const id of plan.get(sim.tick + 1) ?? []) {
+        const worth = Number(id.slice('key-'.length));
+        if (value + worth > 999) continue; // stay within the decimal row
+        sim.stimulate(id);
+        value += worth;
+      }
+      sim.step();
+    }
+    expect(value).toBeGreaterThan(255);
+    expect([binary(sim), dec(sim)]).toEqual([value % 256, value]);
+    expect(bits(sim).every((bit) => bit === 0 || bit === 1)).toBe(true);
+  });
+
+  it.each([11, 12, 13])('never loses a pulse when any neuron is clicked at random during the demo (seed %i)', (seed) => {
+    const readers: Readers = {
+      binary: (sim) => binary(sim) + 256 * sim.state('bit-7')!.fireCount,
+      decimal: (sim) => unwrapped(sim, 'dec'),
+    };
+    const targets = net.neurons.map((neuron) => neuron.id);
+    const busy = storm(net, readers, [...demoClicks('binary-to-decimal'), ...randomClicks(seed, targets, 150, 1500)]);
+    expect(busy).toBeGreaterThan(20);
   });
 
   it('never loses or double-counts a pulse under frantic pressing', () => {

@@ -52,8 +52,12 @@ function ladder(b: NetworkBuilder, x: number, y: number, k: number, into: string
 // Times tables
 // ---------------------------------------------------------------------------
 
-/** Seconds between timer ticks, and how many ticks before it stops. */
-export const TIMES_TABLE_INTERVAL = 10;
+/**
+ * Seconds between timer ticks, and how many ticks before it stops. The ×9 row
+ * is up to date about 9.5 s after a tick, so a 12 s interval leaves the whole
+ * table standing still, readable, for a couple of seconds before the next one.
+ */
+export const TIMES_TABLE_INTERVAL = 12;
 export const TIMES_TABLE_COUNT = 12;
 
 /** Grid column of each multiplier's bus neuron, and the row of its top rail. */
@@ -69,9 +73,9 @@ function timesTables(): Example {
   const step = b.normal(6, 1, 1, { id: 'step', label: '+1' });
   const timer = b.timer(7, 0, { id: 'timer', interval: TIMES_TABLE_INTERVAL, times: TIMES_TABLE_COUNT });
   b.connect(timer, step);
-  const n = decimal(b, 4, 1, 2, 'n');
+  const n = decimal(b, 4, 1, 3, 'n');
   b.connect(step, n[0]!);
-  b.text(2.7, 1.15, 'n', { size: 0.7, align: 'right', tone: 'accent' });
+  b.text(1.7, 1.15, 'n', { size: 0.7, align: 'right', tone: 'accent' });
 
   // Two buses carry each tick down the left and right columns.
   let previous = step;
@@ -94,13 +98,13 @@ function timesTables(): Example {
     category: 'Calculators',
     summary: 'Nine multiplier ladders turn one count into a whole times table.',
     description:
-      'A timer ticks 12 times, ten seconds apart. Each tick fires the +1 neuron, which adds 1 to n and sends the tick down two buses, one on the left of each column, which hand a copy to every row.\n\n' +
-      'Row ×k is fed by a multiplier ladder: k neurons with threshold 1 in a row. The tick runs out along the top rail, and every rung drops a copy onto the bottom rail, which carries it back into the row\'s counter. One pulse in, k pulses out, so after n ticks row ×k reads k × n. The two rails run in opposite directions, so the copies arrive half a second apart instead of all at once.\n\n' +
-      'Every relay has threshold 1, so it fires once for every pulse it receives, and the counters are ordinary decimal Digits: no pulse is ever lost, however they bunch up. The ×9 ladder is the slowest, and the whole table is up to date about nine and a half seconds after each tick, just before the next one. When the timer stops, the table reads 12, 24, 36 … 108.',
+      'A timer ticks 12 times, twelve seconds apart. Each tick fires the +1 neuron, which adds 1 to n and sends the tick down two buses, one on the left of each column, which hand a copy to every row.\n\n' +
+      'Row ×k is fed by a multiplier ladder: a top rail of k relays (neurons with threshold 1) above a bottom rail. The tick runs out along the top rail, and every rung drops a copy onto the bottom rail, which carries it back into the row\'s counter. One pulse in, k pulses out, so after n ticks row ×k reads k × n. The two rails run in opposite directions, so the copies arrive half a second apart instead of all at once.\n\n' +
+      'Every relay has threshold 1, so it fires once for every pulse it receives, and the counters are ordinary decimal Digits: no pulse is ever lost, however they bunch up. The rows catch up one after another, ×9 last, about nine and a half seconds after each tick; then the whole table stands still for a couple of seconds before the next one. When the timer stops, the table reads 12, 24, 36 … 108.',
     tryThis: [
       'Click +1 for an extra tick: n and every row move on together. Click it as fast as you like; every click counts.',
       'Click the first rung of a ladder (the green neuron right above its ones digit) to add one more lot to that row alone: ×7 jumps by exactly 7.',
-      'Click a rung further along: it only reaches the rungs after it, so the fifth rung of ×9 adds 5.',
+      'Click a rung further along: only it and the rungs after it drop a copy, so the fifth rung of ×9 adds 5.',
       'Slow down to 1× and watch nine copies stream into the ×9 counter.',
     ],
     network: b.build(),
@@ -117,14 +121,17 @@ export const DIVISORS = [2, 3, 5, 7] as const;
 
 function division(): Example {
   const b = new NetworkBuilder();
-  const q = 6; // column of every quotient's ones digit (and N's ones digit)
-  const bx = q + 3; // the bus column, right of the remainders
+  const q = 5; // column of every quotient's ones digit (and N's ones digit)
+  // The bus column, two cells right of the remainders so the "remainder"
+  // heading has room and the bus line does not cut through it.
+  const bx = q + 4;
   b.text(0, -0.2, 'Division with remainders', { size: 0.9, tone: 'accent' });
 
   // Keys. "+10" is a ten-rung multiplier ladder that empties into "+1".
   const one = b.normal(bx, 2, 1, { id: 'key-1', label: '+1' });
   ladder(b, bx, 1, 10, one, 'key-10', { dir: -1, label: '+10' });
   b.text(bx + 1.3, 1.6, 'press\na key', { size: 0.55, tone: 'muted' });
+  b.text(0, 3.2, '+10 drops ten pulses into +1', { size: 0.45, tone: 'muted' });
 
   // The bus runs down the right-hand side and hands every pulse to each row.
   // First N, a plain decimal counter of every pulse sent.
@@ -170,9 +177,9 @@ function division(): Example {
     demo: [
       { at: 0.5, neuron: 'key-10-r1', caption: 'Press +10 twice: each press sends ten pulses to every row.' },
       { at: 1, neuron: 'key-10-r1' },
-      { at: 10, neuron: 'key-1', caption: '21 = 3 × 7: the ÷3 and ÷7 remainders are 0.' },
-      { at: 14, neuron: 'key-1', caption: '22 = 2 × 11.' },
-      { at: 18, neuron: 'key-1', caption: '23: no remainder is 0, so none of 2, 3, 5, 7 divides it. 23 is prime.' },
+      { at: 10, neuron: 'key-1', caption: '+1 makes 21 = 3 × 7: watch the ÷3 and ÷7 remainders drop to 0.' },
+      { at: 14, neuron: 'key-1', caption: '+1 makes 22 = 2 × 11: now only the ÷2 remainder is 0.' },
+      { at: 18, neuron: 'key-1', caption: '+1 makes 23. No remainder is 0, so none of 2, 3, 5 and 7 divides it: 23 is prime.' },
     ],
   };
 }
@@ -224,13 +231,13 @@ function binaryToDecimal(): Example {
     summary: 'Press the keys for the 1 bits; a doubling chain does the rest.',
     description:
       'Each key passes every pulse it gets to the key on its right twice: once straight across, and once over the bump through the neuron above. So a pulse doubles at every step. Key 1 is right next to the counters, key 2 is one doubling away, and key 128 is seven doublings away: one press of 128 delivers 128 pulses.\n\n' +
-      'Key 1 feeds two counters on the bottom row. The binary one is made of Digits with threshold 2, each carrying into the bit on its left, and each bit sits under the key with its place value. The decimal one is the usual threshold-10 Digits. Both count the same pulses, so they always settle on the same number.\n\n' +
+      'Key 1 feeds two counters on the bottom row. The binary one is made of Digits with threshold 2, each carrying into the bit on its left, and each bit sits under the key with its place value. The decimal one is the usual threshold-10 Digits. Both count the same pulses, so they settle on the same number.\n\n' +
       'To convert a binary number, press the keys for its 1 bits: 1011 is 8 + 2 + 1 = 11. The order and speed of the presses do not matter. The binary row has eight bits, so like a byte it wraps back to 0 after 255; the decimal row goes up to 999.',
     tryThis: [
-      'Type a number of your own, up to 255, by pressing the keys for its 1 bits.',
-      'Press the same key twice: 64 + 64 carries into the 128 bit, just like adding in binary.',
+      'Press 1 once more: 255 + 1 carries through all eight bits, so the binary row wraps round to 00000000, like a byte, while the decimal row reads 256.',
+      'Then press 64 twice: 64 + 64 carries into the 128 bit, just as in binary addition.',
       'Slow down and press 128: its pulses reach key 1 in eight bunches of 1, 7, 21, 35, 35, 21, 7 and 1, a row of Pascal\'s triangle. Routes with the same number of bumps take the same time (compare Bell curve).',
-      'Go past 255: the binary row wraps round to 0 while the decimal row keeps counting.',
+      'Convert a number of your own, up to 255: start from 0 (reset) and press the keys for its 1 bits, in any order and as fast as you like.',
     ],
     network: b.build(),
     demo: [
