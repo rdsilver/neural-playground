@@ -126,9 +126,9 @@ function addingMachine(): Network {
 
 const ADDING_MACHINE_DEMO = demoScript([
   { at: 0.5, keys: ['tens+4', 'ones+7'], caption: 'Type 47: press 4 in the tens column and 7 in the ones.' },
-  { at: 6.5, keys: ['tens+8', 'ones+5'], caption: '47 + 85 = 132: the ones pass 9 and send a carry pulse left.' },
+  { at: 6.5, keys: ['tens+8', 'ones+5'], caption: '47 + 85 = 132: the ones and the tens both pass 9, so each sends a carry pulse left.' },
   { at: 14.5, keys: ['tens-5', 'ones-8'], caption: '132 − 58 = 74: a − key adds its complement (−8 adds 2), then borrows from the left.' },
-  { at: 31, keys: ['tens+1', 'ones+2'], caption: 'Multiply by adding: for + 12 × 13, press 12 three times…' },
+  { at: 31, keys: ['tens+1', 'ones+2'], caption: 'Now add 12 × 13 the Comptometer way: press 12 three times…' },
   { at: 32, keys: ['tens+1', 'ones+2'] },
   { at: 33, keys: ['tens+1', 'ones+2'] },
   { at: 34, keys: ['hundreds+1', 'tens+2'], caption: '…then 12 once more, one column to the left (120): 74 + 156 = 230.' },
@@ -148,7 +148,7 @@ function pulseDial(): Network {
   const b = new NetworkBuilder();
   const cx = 6;
   const cy = 6;
-  b.text(cx + 0.5, 0, 'Pulse dial', { size: 0.9, align: 'center' });
+  b.text(cx + 0.5, -0.2, 'Pulse dial', { size: 0.9, align: 'center' });
   b.text(cx + 0.5, 1.1, 'Click a number on the dial.', { size: 0.5, align: 'center', tone: 'muted' });
   const collector = b.normal(cx, cy, 1, { id: 'collector' });
   pulseLadder(
@@ -162,10 +162,12 @@ function pulseDial(): Network {
   return b.build();
 }
 
+// The 0 (ten pulses, about 8 s) comes second so that the last step settles
+// while its caption is still showing.
 const PULSE_DIAL_DEMO = demoScript([
   { at: 0.5, keys: ['dial-7'], caption: 'Dial 7: the pulse passes 7, 6, 5 … 1 and each drops one pulse into the middle.' },
-  { at: 9, keys: ['dial-5'], caption: '7 + 5 = 12: the ones digit passes 9, resets to 0 and carries 1 into the tens.' },
-  { at: 17, keys: ['dial-0'], caption: '0 sends ten pulses, just like a telephone: 12 + 10 = 22.' },
+  { at: 9, keys: ['dial-0'], caption: '0 sends ten pulses, like a telephone: the ones go all the way round and carry 1 into the tens. 7 + 10 = 17.' },
+  { at: 18.5, keys: ['dial-5'], caption: '17 + 5 = 22: the ones pass 9 again, reset to 0 and carry.' },
 ]);
 
 // ---- Examples ------------------------------------------------------------
@@ -175,7 +177,7 @@ export const CALCULATOR_EXAMPLES: Example[] = [
     id: 'adding-machine',
     title: 'Adding machine',
     category: 'Calculators',
-    summary: 'A four-digit mechanical calculator: keys send pulses, digits count them, carries ripple left.',
+    summary: 'Add and subtract on a four-digit machine: keys send pulses, digits count them, carries ripple left.',
     description:
       'A four-digit adding machine in the spirit of the 1887 Comptometer. Each decimal place has its own keys, and pressing a key adds that many to its column: type 47 by pressing 4 in the tens and 7 in the ones.\n\n' +
       'How does key 7 send seven pulses? The keys in each top arch form a chain, 9 → 8 → … → 1, and every key also connects to the collector in the middle of the arch. Press 7 and a pulse runs along the chain through 7, 6, 5, 4, 3, 2 and 1, and each of those seven keys drops one pulse into the collector, which passes it down to the display.\n\n' +
@@ -183,10 +185,10 @@ export const CALCULATOR_EXAMPLES: Example[] = [
       'Subtraction is the clever part. Taking charge away from a digit cannot borrow: a 0 would just go negative, and nothing would tell the column on its left. So the bottom keys only ever add, using ten\'s complement, the trick mechanical calculators used. In the ones column, −3 adds 7 and then borrows: its pulse leaves the end of the − keys and runs through the − keys of every column to the left, adding 9 to each. That adds 9997 in total, and in a four-digit machine adding 9997 is the same as subtracting 3, because the carry that would make 10000 falls off the left end. Go below zero and it wraps round to 9999, like a real adding machine.\n\n' +
       'Comptometer operators multiplied by repeated adding with shifting: for 12 × 13, press 12 three times, then once more one column to the left (that is 120).',
     tryThis: [
-      'Press 9 in the hundreds, tens and ones, then 1 in the ones, and watch one carry ripple all the way to the thousands.',
-      'With the display at 0000, press −1 in the ones: the borrow runs through all four columns and leaves 9999.',
-      'Multiply 12 × 13: press 1 (tens) and 2 (ones) three times, then 1 (hundreds) and 2 (tens) once. Press as fast as you like; no pulse is lost.',
-      'The display settles on the exact answer once the pulses land. Reset the simulation to clear it.',
+      'There is no clear key, so subtract what the display shows: after the demo, press −2 in the hundreds and −3 in the tens to get back to 0000.',
+      'From 0000, press −1 in the ones: the borrow runs through all four columns and leaves 9999. Once it settles, press 1 in the ones and a single carry ripples all the way back to 0000.',
+      'Multiply 12 × 13: press 1 (tens) and 2 (ones) three times, then 1 (hundreds) and 2 (tens) once, and 156 is added. Press as fast as you like; no pulse is lost.',
+      'The display is only exact once the pulses have landed. While a borrow is still running, the digits on the left show in-between values.',
     ],
     network: addingMachine(),
     speed: 2,
@@ -202,7 +204,7 @@ export const CALCULATOR_EXAMPLES: Example[] = [
       'The ten keys form a chain, 0 → 9 → 8 → … → 1, and every key also connects to the collector in the middle. Click 7 and a pulse runs round the ring through 7, 6, 5, 4, 3, 2 and 1, and each of those keys drops one pulse into the collector: seven pulses. Like a telephone, 0 sends ten.\n\n' +
       'The collector passes each pulse to a two-digit counter. The ones digit is a Digit neuron with threshold 10: on the tenth pulse it resets to 0 and carries one pulse into the tens. So the dial is an adding machine: dial 7, then 5, and it shows 12.',
     tryThis: [
-      'Dial 0 a few times: each one adds exactly ten, so only the tens digit changes.',
+      'Dial 0 a few times: each time the ones digit spins all the way round, ends where it started and carries 1 into the tens.',
       'Click several numbers quickly. The pulses overlap but every one is counted.',
       'The counter goes up to 99 and then wraps round to 00. The Adding machine example adds more digits, and subtraction.',
     ],

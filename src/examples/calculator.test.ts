@@ -258,6 +258,104 @@ describe('adding machine', () => {
     for (const step of machine.demo!) expected += KEYS.find((k) => k.id === step.neuron)!.amount;
     expect(mod(expected)).toBe(230);
   });
+
+  it('after the demo, the tryThis steps clear to 0000, wrap to 9999 and carry back to 0000', () => {
+    const sim = new Simulation(machine.network);
+    scheduleDemo(sim, machine.demo!);
+    sim.runUntilIdle();
+    expect(display(sim)).toBe(230);
+    // "There is no clear key, so subtract what the display shows."
+    sim.stimulate('hundreds-2');
+    sim.stimulate('tens-3');
+    sim.runUntilIdle();
+    expect(display(sim)).toBe(0);
+    // "From 0000, press −1 in the ones … leaves 9999."
+    sim.stimulate('ones-1');
+    sim.runUntilIdle();
+    expect(display(sim)).toBe(9999);
+    // "… press 1 in the ones and a single carry ripples all the way back."
+    sim.stimulate('ones+1');
+    const fires = countFires(sim, 30 * TICKS_PER_SECOND);
+    for (const place of ADDING_MACHINE_PLACES) expect(fires.get(place), place).toBe(1);
+    expect(display(sim)).toBe(0);
+  });
+
+  it('replays the demo tick for tick after a reset mid-calculation, or when started late', () => {
+    /** Fires of a demo run, timed from when the demo was scheduled. */
+    const trace = (sim: Simulation) => {
+      const start = sim.tick;
+      scheduleDemo(sim, machine.demo!);
+      const fires: string[] = [];
+      while (!sim.isIdle()) for (const e of sim.step()) fires.push(`${e.tick - start} ${e.neuron}`);
+      expect(display(sim)).toBe(230);
+      return fires;
+    };
+    const reference = trace(new Simulation(machine.network));
+
+    // Reset in the middle of the subtraction, with the user's own pulses in flight too.
+    const replayed = new Simulation(machine.network);
+    scheduleDemo(replayed, machine.demo!);
+    replayed.runSeconds(20);
+    replayed.stimulate('thousands+7');
+    replayed.stimulate('ones-1');
+    expect(replayed.pulses().length).toBeGreaterThan(0);
+    replayed.reset();
+    expect(display(replayed)).toBe(0);
+    expect(trace(replayed)).toEqual(reference);
+
+    // Started after the machine has idled for a while.
+    const late = new Simulation(machine.network);
+    late.run(1234);
+    expect(trace(late)).toEqual(reference);
+  });
+
+  it('adds presses made while the demo plays, including ones on the same tick as a demo step', () => {
+    // The demo queued twice presses every demo key twice on the same tick.
+    const doubled = new Simulation(machine.network);
+    scheduleDemo(doubled, machine.demo!);
+    scheduleDemo(doubled, machine.demo!);
+    doubled.runUntilIdle();
+    expect(display(doubled)).toBe(460);
+
+    for (let seed = 1; seed <= 12; seed++) {
+      const rand = mulberry32(1000 + seed);
+      const sim = new Simulation(machine.network);
+      scheduleDemo(sim, machine.demo!);
+      let expected = 230;
+      while (sim.seconds < 40) {
+        if (rand() < 0.02) {
+          const { id, amount } = KEYS[Math.floor(rand() * KEYS.length)]!;
+          sim.stimulate(id);
+          expected += amount;
+        }
+        sim.step();
+      }
+      sim.runUntilIdle();
+      expect(display(sim), `seed ${seed}`).toBe(mod(expected));
+    }
+  });
+
+  it('cancels out exactly when every key is pressed at once, or one per tick in shuffled order', () => {
+    // +k and −k add up to 0 in every column, so all 72 keys together change nothing.
+    const sim = new Simulation(machine.network);
+    enter(sim, 4321);
+    for (const { id } of KEYS) sim.stimulate(id);
+    sim.runUntilIdle();
+    expect(display(sim)).toBe(4321);
+
+    const rand = mulberry32(72);
+    const order = [...KEYS];
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [order[i], order[j]] = [order[j]!, order[i]!];
+    }
+    for (const { id } of order) {
+      sim.stimulate(id);
+      sim.step();
+    }
+    sim.runUntilIdle();
+    expect(display(sim)).toBe(4321);
+  });
 });
 
 describe('pulse dial', () => {
@@ -292,11 +390,23 @@ describe('pulse dial', () => {
     }
   });
 
-  it('demo: 7, then 7 + 5 = 12, then + 10 = 22', () => {
+  it('0 spins the ones digit all the way round and carries once, and 99 wraps to 00', () => {
+    const sim = new Simulation(dial.network);
+    sim.stimulate('dial-7');
+    sim.runUntilIdle();
+    for (let i = 1; i <= 10; i++) {
+      sim.stimulate('dial-0');
+      const fires = countFires(sim, 30 * TICKS_PER_SECOND);
+      expect(fires.get('ones'), `0 number ${i}`).toBe(1);
+      expect(read(sim)).toBe((7 + 10 * i) % 100);
+    }
+  });
+
+  it('demo: 7, then 7 + 10 = 17, then 17 + 5 = 22', () => {
     const sim = new Simulation(dial.network);
     scheduleDemo(sim, dial.demo!);
     const steps = captionedSteps(dial);
-    const results = [7, 12, 22];
+    const results = [7, 17, 22];
     steps.forEach((step, i) => {
       if (i > 0) {
         sim.run(step.tick - 1 - sim.tick);
@@ -306,10 +416,36 @@ describe('pulse dial', () => {
     });
     sim.runUntilIdle();
     expect(read(sim)).toBe(22);
-    expect(steps[1]!.caption).toContain('= 12');
+    expect(steps[1]!.caption).toContain('= 17');
     expect(steps[2]!.caption).toContain('= 22');
   });
 });
+
+describe('calculator demos', () => {
+  // Both apps keep the last caption up for 6 s after the final demo step.
+  const CAPTION_TAIL_SECONDS = 6;
+
+  it('settle while the last caption is still showing', () => {
+    for (const example of [machine, dial]) {
+      const last = Math.max(...example.demo!.map((s) => s.at));
+      const sim = new Simulation(example.network);
+      scheduleDemo(sim, example.demo!);
+      sim.runUntilIdle();
+      expect(sim.seconds, example.id).toBeLessThanOrEqual(last + CAPTION_TAIL_SECONDS);
+    }
+  });
+});
+
+/** Text annotation boxes in cells, estimated the way networkBounds does. */
+function textBoxes(network: Network) {
+  return (network.texts ?? []).map((t) => {
+    const size = t.size ?? 0.6;
+    const lines = t.text.split('\n');
+    const width = Math.max(...lines.map((l) => l.length)) * size * 0.55;
+    const left = t.align === 'center' ? t.x - width / 2 : t.align === 'right' ? t.x - width : t.x;
+    return { text: t.text, left, top: t.y, right: left + width, bottom: t.y + lines.length * size * 1.25 };
+  });
+}
 
 describe('calculator layouts', () => {
   it('stay compact, and no connection passes through or close to another neuron', () => {
@@ -319,6 +455,34 @@ describe('calculator layouts', () => {
       expect(b.maxY - b.minY, example.id).toBeLessThanOrEqual(28);
       const pass = closestPass(example.network);
       expect(pass.distance, `${example.id}: ${pass.what}`).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('keep texts clear of neurons, connection lines and each other', () => {
+    for (const example of [machine, dial]) {
+      const { neurons, connections } = example.network;
+      const at = new Map(neurons.map((n) => [n.id, n]));
+      const boxes = textBoxes(example.network);
+      const inside = (box: (typeof boxes)[number], x: number, y: number) => x > box.left && x < box.right && y > box.top && y < box.bottom;
+      for (const box of boxes) {
+        for (const n of neurons) {
+          // Neurons are drawn 0.08 cells in from their cell's edges.
+          const overlaps = box.left < n.x + 0.92 && box.right > n.x + 0.08 && box.top < n.y + 0.92 && box.bottom > n.y + 0.08;
+          expect(overlaps, `${example.id}: "${box.text}" covers ${n.id}`).toBe(false);
+        }
+        for (const c of connections) {
+          const a = at.get(c.from)!, b = at.get(c.to)!;
+          for (let s = 0; s <= 100; s++) {
+            const x = a.x + 0.5 + ((b.x - a.x) * s) / 100, y = a.y + 0.5 + ((b.y - a.y) * s) / 100;
+            expect(inside(box, x, y), `${example.id}: "${box.text}" is crossed by ${c.from} -> ${c.to}`).toBe(false);
+          }
+        }
+        for (const other of boxes) {
+          if (other === box) continue;
+          const overlaps = box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top;
+          expect(overlaps, `${example.id}: "${box.text}" overlaps "${other.text}"`).toBe(false);
+        }
+      }
     }
   });
 });
