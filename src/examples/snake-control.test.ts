@@ -39,9 +39,16 @@ function bitModel(presses: Press[], reads: number[]) {
       changes.push({ at: a + (p.set ? 34 : 30), d: p.set ? 1 : -1, set: p.set });
     }
   }
-  const valueAt = (tick: number, includeSetAtTick: boolean) =>
-    changes.filter((c) => c.at < tick || (c.at === tick && includeSetAtTick && c.set)).reduce((s, c) => s + c.d, 0);
-  return reads.map((T) => ({ fires: valueAt(T, true) === 1, before: valueAt(T, false) }));
+  // Sweep the (time-ordered) changes past the (ascending) reads.
+  changes.sort((a, b) => a.at - b.at);
+  let i = 0;
+  let value = 0;
+  return reads.map((T) => {
+    while (i < changes.length && changes[i]!.at < T) value += changes[i++]!.d;
+    let setNow = false;
+    for (let j = i; j < changes.length && changes[j]!.at === T; j++) setNow ||= changes[j]!.set;
+    return { fires: value + (setNow ? 1 : 0) === 1, before: value };
+  });
 }
 
 /** Drive a bit with presses; reads land on G at T0 + k*F. */
@@ -205,6 +212,70 @@ describe('control unit', () => {
           checkControl(F, 4 * F + 8, disambiguate(F, 4 * F + 8, presses, unit), unit);
         }
     });
+
+    it(`F=${F}: random bursts (same-tick and many-per-frame presses)`, () => {
+      const unit = makeControl(F);
+      for (const seed of [1, 2, 3, 4]) {
+        const rng = mulberry32(seed);
+        const frames = 400;
+        const presses: KeyPress[] = [];
+        let t = 30;
+        while (t < frames * F) {
+          const burst = 1 + Math.floor(rng() * 4);
+          for (let i = 0; i < burst; i++) presses.push({ t: t + (rng() < 0.3 ? 0 : Math.floor(rng() * 40)), key: DIRECTIONS[Math.floor(rng() * 4)]! });
+          t += Math.floor(rng() * 3 * F);
+        }
+        const kept = disambiguate(F, frames, presses, unit);
+        expect(kept.length).toBeGreaterThan(presses.length * 0.95);
+        const { seen } = checkControl(F, frames, kept, unit);
+        expect(new Set(seen.map((s) => s.d)).size).toBe(4);
+      }
+    });
   }
+
+  it('every pair of presses, all phases and gaps up to 60 ticks (F=90)', { timeout: 120_000 }, () => {
+    const F = 90;
+    const unit = makeControl(F);
+    for (const k1 of DIRECTIONS)
+      for (const k2 of DIRECTIONS) {
+        const presses: KeyPress[] = [];
+        let slot = 0;
+        for (let p = 0; p < F; p++)
+          for (const d of [...Array.from({ length: 61 }, (_, i) => i), 75, 89]) {
+            const t = 200 + slot++ * 3 * F + p;
+            presses.push({ t, key: k1 }, { t: t + d, key: k2 });
+          }
+        const frames = slot * 3 + 4;
+        const kept = disambiguate(F, frames, presses, unit);
+        expect(kept.length).toBeGreaterThan(presses.length * 0.98);
+        checkControl(F, frames, kept, unit);
+      }
+  });
+
+  it('presses during power-on (ticks 0..80) are safe', () => {
+    const F = 90;
+    const unit = makeControl(F);
+    for (const key of DIRECTIONS)
+      for (let t = 0; t <= 80; t++) {
+        const sim = new Simulation(unit.net);
+        if (t === 0) sim.stimulate(unit.ctl.keys[key]);
+        else sim.schedule(t, unit.ctl.keys[key]);
+        const strobes: string[] = [];
+        sim.run(12 * F);
+        for (let k = 0; k < 10; k++) {
+          const fired = DIRECTIONS.filter((d) => sim.state(unit.ctl.strobes[d])!.fireCount > 0);
+          strobes.push(fired.join());
+        }
+        // Afterwards it behaves like a press that got through: one strobe per frame, ending on `key`.
+        const events = new Simulation(unit.net);
+        if (t === 0) events.stimulate(unit.ctl.keys[key]);
+        else events.schedule(t, unit.ctl.keys[key]);
+        const seen: string[] = [];
+        while (events.tick < 1 + 11 * F + unit.ctl.strobeOffset) for (const e of events.step()) if (DIRECTIONS.some((d) => unit.ctl.strobes[d] === e.neuron)) seen.push(`${e.neuron}@${(e.tick - 1 - unit.ctl.strobeOffset) % F}`);
+        expect(seen.length, `key ${key} at ${t}`).toBe(12);
+        expect(seen.every((s) => s.endsWith('@0'))).toBe(true);
+        expect(seen[seen.length - 1]).toBe(`${unit.ctl.strobes[key]}@0`);
+      }
+  });
 });
 
