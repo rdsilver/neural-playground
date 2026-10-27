@@ -46,6 +46,15 @@ export function indexNetwork(net: Network): NetIndex {
 
 /** A fresh id like "n12" that is not in `taken`. */
 export function nextId(taken: Iterable<string>, prefix: string): string {
+  return idMaker(taken, prefix)();
+}
+
+/**
+ * Fresh ids one after another, as repeated nextId calls (each new id
+ * counted as taken) would give, without rescanning every id each time:
+ * pasting thousands of neurons stays linear.
+ */
+function idMaker(taken: Iterable<string>, prefix: string): () => string {
   let max = 0;
   const set = new Set(taken);
   for (const id of set) {
@@ -53,9 +62,12 @@ export function nextId(taken: Iterable<string>, prefix: string): string {
     const n = Number(id.slice(prefix.length));
     if (Number.isInteger(n) && n > max) max = n;
   }
-  let candidate = `${prefix}${max + 1}`;
-  for (let i = max + 2; set.has(candidate); i++) candidate = `${prefix}${i}`;
-  return candidate;
+  return () => {
+    let candidate = `${prefix}${++max}`;
+    while (set.has(candidate)) candidate = `${prefix}${++max}`;
+    set.add(candidate);
+    return candidate;
+  };
 }
 
 /** A neuron of `kind` with that kind's defaults. */
@@ -78,10 +90,15 @@ export type NeuronPatch = Partial<Pick<NeuronSpec, 'kind' | 'threshold' | 'label
  * drops parameters that no longer apply. An empty label removes it.
  */
 export function updateNeuron(net: Network, id: string, patch: NeuronPatch): Network {
+  return updateNeurons(net, new Set([id]), patch);
+}
+
+/** Apply the same patch to several neurons in one pass (multi-selection edits of big networks). */
+export function updateNeurons(net: Network, ids: ReadonlySet<string>, patch: NeuronPatch): Network {
   return {
     ...net,
     neurons: net.neurons.map((n) => {
-      if (n.id !== id) return n;
+      if (!ids.has(n.id)) return n;
       const kind = patch.kind ?? n.kind;
       const info = KIND_INFO[kind];
       const next: NeuronSpec = { id: n.id, kind, x: n.x, y: n.y, threshold: n.threshold };
@@ -231,18 +248,16 @@ export function pasteClip(net: Network, clip: Clip, x: number, y: number): { net
   const taken = new Set(net.neurons.map((n) => cellKey(n.x, n.y)));
   let dx = x;
   while (clip.neurons.some((n) => taken.has(cellKey(n.x + dx, n.y + y)))) dx++;
-  const ids = net.neurons.map((n) => n.id);
+  const neuronId = idMaker(net.neurons.map((n) => n.id), 'n');
   const rename = new Map<string, string>();
   const neurons = clip.neurons.map((n) => {
-    const id = nextId(ids, 'n');
-    ids.push(id);
+    const id = neuronId();
     rename.set(n.id, id);
     return { ...n, id, x: n.x + dx, y: n.y + y };
   });
-  const textIds = (net.texts ?? []).map((t) => t.id);
+  const textId = idMaker((net.texts ?? []).map((t) => t.id), 't');
   const texts = clip.texts.map((t) => {
-    const id = nextId(textIds, 't');
-    textIds.push(id);
+    const id = textId();
     return { ...t, id, x: t.x + dx, y: t.y + y };
   });
   const connections = clip.connections.map((c) => ({ from: rename.get(c.from)!, to: rename.get(c.to)! }));

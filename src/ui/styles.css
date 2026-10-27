@@ -58,6 +58,16 @@
   --kind-timer: #a590ff;
   --kind-note: #2fd6d6;
   --kind-lamp: #ffb43d;
+  /* Lamps: LEDs on a dark screen (dark in both themes, like a real panel). */
+  --lamp-screen: #07080b;
+  --lamp-off: #1c1a17;
+  --lamp-rim: rgba(255, 180, 61, 0.2);
+  --lamp-on: #ffb43d;
+  --lamp-hot: #fff2d4;
+  /* Bloom strength around a lit LED (an alpha). */
+  --lamp-glow: 0.55;
+  --lamp-label: #ffd28a;
+  --lamp-ink: #2b1900;
   --note-default: #e6e8ee;
   --note-muted: #868d9b;
   --note-accent: #ffd166;
@@ -115,6 +125,14 @@
   --kind-timer: #7553e8;
   --kind-note: #0d9799;
   --kind-lamp: #c77800;
+  --lamp-screen: #1e2128;
+  --lamp-off: #34302a;
+  --lamp-rim: rgba(255, 186, 80, 0.24);
+  --lamp-on: #ffae33;
+  --lamp-hot: #fff3d9;
+  --lamp-glow: 0.5;
+  --lamp-label: #ffd28a;
+  --lamp-ink: #2b1900;
   --note-default: #20252e;
   --note-muted: #6d7482;
   --note-accent: #a86400;
@@ -991,6 +1009,58 @@ kbd {
   font-size: 14px;
   line-height: 1.5;
   text-wrap: pretty;
+}
+
+.card-keys {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.card-keys-title {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.card-keys-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card-keys-list li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.card-keys-caps {
+  display: flex;
+  gap: 3px;
+}
+
+.card-keys-caps kbd {
+  min-width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
+
+.card-keys-label {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .card-desc p {
@@ -2869,8 +2939,8 @@ dialog.palette[open] {
   }
 }
 
-/* Short windows: a tighter rail. */
-@media (max-height: 700px) and (min-width: 761px) {
+/* Short windows: a tighter rail (four tools and seven kinds fit a 720px-tall window). */
+@media (max-height: 760px) and (min-width: 761px) {
   .rail-btn {
     min-height: 42px;
     gap: 1px;
@@ -3267,6 +3337,10 @@ dialog.palette[open] {
 
   .kind-sheet {
     bottom: calc(var(--dock-h) + var(--gutter) + 8px);
+    /* Seven kinds: on short phones the sheet scrolls rather than run off the top. */
+    max-height: calc(100dvh - var(--dock-h) - var(--gutter) - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 }
 

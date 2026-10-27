@@ -49,6 +49,7 @@ export class HoverCard {
     } else {
       detail = `charge ${st?.charge ?? 0} / ${n.threshold} · fired ${st?.fireCount ?? 0}×`;
       if (n.kind === 'note') detail = `${noteName(n.note ?? 60)} · ${detail}`;
+      if (n.kind === 'lamp') detail = `${(st?.charge ?? 0) > 0 ? 'lit' : 'dark'} · ${detail}`;
     }
     // What a click does here: poke while running (Shift-click or right-click
     // to inspect instead), inspect while paused.

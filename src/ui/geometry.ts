@@ -9,17 +9,20 @@ import type { Point } from './camera';
 export const NEURON_RADIUS = 0.43;
 /** Half the side of square (Digit) neurons, in cells. */
 export const DIGIT_HALF = 0.42;
+/** Half the side of a Lamp's tile: a whole cell, so lamps side by side form one screen. */
+export const LAMP_HALF = 0.5;
 /** Gap between a neuron's outline and the tip of an arrow pointing at it. */
 const ARROW_GAP = 0.04;
 /** Sideways offset of each half of a two-way pair, in cells. */
 const PAIR_OFFSET = 0.13;
 
-export const isSquare = (kind: NeuronKind) => kind === 'character';
+/** Digits and Lamps have square outlines (a tile); every other kind is round. */
+export const isSquare = (kind: NeuronKind) => kind === 'character' || kind === 'lamp';
 
 /** Distance from a neuron's centre to its outline in direction (ux, uy). */
 export function shapeExtent(kind: NeuronKind, ux: number, uy: number): number {
   if (!isSquare(kind)) return NEURON_RADIUS;
-  return DIGIT_HALF / Math.max(Math.abs(ux), Math.abs(uy), 1e-6);
+  return (kind === 'lamp' ? LAMP_HALF : DIGIT_HALF) / Math.max(Math.abs(ux), Math.abs(uy), 1e-6);
 }
 
 export interface Endpoint {

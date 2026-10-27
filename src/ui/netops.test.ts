@@ -15,6 +15,7 @@ import {
   reverseConnection,
   setTwoWay,
   updateNeuron,
+  updateNeurons,
   updateText,
 } from './netops';
 
@@ -38,6 +39,17 @@ describe('netops', () => {
     const r = addNeuron(emptyNetwork(), 'timer', 3, 4)!;
     expect(r.net.neurons[0]).toEqual({ id: 'n1', kind: 'timer', x: 3, y: 4, threshold: 1, interval: 1, times: -1 });
     expect(addNeuron(r.net, 'normal', 3, 4)).toBeNull();
+  });
+
+  it('patches several neurons in one pass, leaving the rest alone', () => {
+    const net = updateNeurons(sample(), new Set(['a', 'c']), { threshold: 4 });
+    expect(net.neurons.map((n) => [n.id, n.threshold])).toEqual([
+      ['a', 4],
+      ['c', 4],
+      ['t', 1],
+    ]);
+    const lamps = updateNeurons(sample(), new Set(['a', 'c']), { kind: 'lamp' });
+    expect(lamps.neurons.filter((n) => n.kind === 'lamp').map((n) => n.id)).toEqual(['a', 'c']);
   });
 
   it('changes kind, keeping shared params and adding defaults', () => {

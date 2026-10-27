@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { connectionPath, DIGIT_HALF, distanceToPath, endTangent, NEURON_RADIUS, pointOnPath, shapeExtent } from './geometry';
+import { connectionPath, DIGIT_HALF, distanceToPath, endTangent, LAMP_HALF, NEURON_RADIUS, pointOnPath, shapeExtent } from './geometry';
 
 describe('connectionPath', () => {
   const a = { x: 0, y: 0, kind: 'normal' as const };
@@ -31,6 +31,12 @@ describe('connectionPath', () => {
     expect(shapeExtent('character', Math.SQRT1_2, Math.SQRT1_2)).toBeCloseTo(DIGIT_HALF * Math.SQRT2);
     const p = connectionPath(a, { x: 3, y: 3, kind: 'character' }, false);
     expect(3.5 - p.x1).toBeGreaterThan(DIGIT_HALF);
+  });
+
+  it('stops arrows outside a Lamp\'s whole-cell tile', () => {
+    expect(shapeExtent('lamp', 0, 1)).toBeCloseTo(LAMP_HALF);
+    const p = connectionPath(a, { x: 0, y: 5, kind: 'lamp' }, false);
+    expect(5 - p.y1).toBeGreaterThan(0);
   });
 
   it('measures distance to the drawn curve', () => {

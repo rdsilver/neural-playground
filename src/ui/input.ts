@@ -179,15 +179,12 @@ export class BoardInput {
       const tol = Math.max(5, Math.min(9, cam.scale * 0.15)) / cam.scale;
       let best: { from: string; to: string } | null = null;
       let bestD = tol;
-      for (const [from, targets] of this.renderer.paths(this.store.network, index).byFrom) {
-        for (const [to, path] of targets) {
-          if (w.x < Math.min(path.x0, path.cx, path.x1) - tol || w.x > Math.max(path.x0, path.cx, path.x1) + tol) continue;
-          if (w.y < Math.min(path.y0, path.cy, path.y1) - tol || w.y > Math.max(path.y0, path.cy, path.y1) + tol) continue;
-          const d = distanceToPath(path, w.x, w.y);
-          if (d < bestD) {
-            bestD = d;
-            best = { from, to };
-          }
+      for (const wire of this.renderer.paths(this.store.network, index).wires) {
+        if (w.x < wire.minX - tol || w.x > wire.maxX + tol || w.y < wire.minY - tol || w.y > wire.maxY + tol) continue;
+        const d = distanceToPath(wire, w.x, w.y);
+        if (d < bestD) {
+          bestD = d;
+          best = { from: wire.from, to: wire.to };
         }
       }
       if (best) return { type: 'connection', ...best };

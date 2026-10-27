@@ -10,6 +10,7 @@ import { EXAMPLES, type Example } from '../../examples';
 import type { App } from '../app';
 import { h } from '../dom';
 import { icons } from '../icons';
+import type { KeyGroup } from '../keys';
 import { tipped } from './tooltip';
 
 /** Write-ups longer than this start folded behind "Read more". */
@@ -154,7 +155,9 @@ export class ExampleCard {
         })
       : null;
 
-    const parts: (HTMLElement | null)[] = [this.header(ex.category, ex.title), h('p', { class: 'card-summary', text: ex.summary }), desc, more];
+    // Keyboard controls, for keyboards (touch screens use the on-board keys).
+    const keys = this.coarse.matches ? [] : app.exampleKeys;
+    const parts: (HTMLElement | null)[] = [this.header(ex.category, ex.title), h('p', { class: 'card-summary', text: ex.summary }), keys.length ? this.keysRow(keys) : null, desc, more];
     if (total) parts.push(this.checklist(ex, tried));
     parts.push(this.stats());
     this.scroll.replaceChildren(...parts.filter((p): p is HTMLElement => p !== null));
@@ -171,6 +174,27 @@ export class ExampleCard {
       : h('button', { class: 'btn outline', type: 'button', onclick: () => app.restart() }, h('span', { html: icons.reset }), 'Restart');
     const more2 = tipped(h('button', { class: 'btn icon-btn', type: 'button', html: icons.examples, onclick: () => app.openGallery() }), 'More examples', app.keysFor('examples'));
     this.footer.replaceChildren(primary, more2, h('span', { class: 'grow' }), nextBtn);
+  }
+
+  /** "Keys  ← A ◀   ↑ W ▲ …": each neuron's keys, then its label on the board. */
+  private keysRow(groups: readonly KeyGroup[]): HTMLElement {
+    return h(
+      'div',
+      { class: 'card-keys' },
+      h('span', { class: 'card-keys-title', text: 'Keys' }),
+      h(
+        'ul',
+        { class: 'card-keys-list', 'aria-label': 'Keyboard controls' },
+        ...groups.map((g) =>
+          h(
+            'li',
+            { 'aria-label': `${g.keys.join(' or ')}: presses ${g.label}` },
+            h('span', { class: 'card-keys-caps', 'aria-hidden': 'true' }, ...g.keys.map((k) => h('kbd', { text: k }))),
+            h('span', { class: 'card-keys-label', text: g.label, 'aria-hidden': 'true' }),
+          ),
+        ),
+      ),
+    );
   }
 
   private checklist(ex: Example, tried: Set<number>): HTMLElement {
@@ -207,7 +231,7 @@ export class ExampleCard {
       : [
           tip(['Click'], 'a neuron while it runs to poke it (+1 charge)'),
           tip(['⇧', 'Click'], 'or right-click to inspect it'),
-          tip(['1', '–', '6'], 'pick a neuron kind, then click the grid'),
+          tip(['1', '–', String(NEURON_KINDS.length)], 'pick a neuron kind, then click the grid'),
           tip(['Drag'], 'from a neuron’s handle to connect it'),
           tip([mod, 'K'], 'search every command'),
         ];

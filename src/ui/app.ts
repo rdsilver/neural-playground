@@ -40,6 +40,7 @@ import {
   type NeuronPatch,
 } from './netops';
 import { appCommands } from './app-commands';
+import { boundNeuron, keyGroups, type KeyGroup } from './keys';
 import { insetOptions, revealOffset, type Chrome } from './layout';
 import { scheduleNotes } from './music';
 import { ExampleCard } from './panels/card';
@@ -70,6 +71,8 @@ const AUTOSAVE_DELAY = 400;
 const READABLE_SCALE = 18;
 /** The demo's ghost finger appears this long (real time) before it presses. */
 const TAP_LEAD_SECONDS = 0.35;
+/** Number keys that pick a neuron kind, in NEURON_KINDS order. */
+const KIND_KEYS = '123456789'.slice(0, NEURON_KINDS.length);
 
 export class App implements BoardHost {
   readonly store: Store;
@@ -90,7 +93,7 @@ export class App implements BoardHost {
     role: 'application',
     'aria-roledescription': 'neural network board',
     'aria-label':
-      'Neural network board. Arrow keys move a cell cursor, 1 to 6 place a neuron there, Enter selects or places, N and Shift+N step through the neurons, Enter pokes the selected neuron, Space plays or pauses.',
+      `Neural network board. Arrow keys move a cell cursor, 1 to ${NEURON_KINDS.length} place a neuron there, Enter selects or places, N and Shift+N step through the neurons, Enter pokes the selected neuron, Space plays or pauses.`,
   });
   /** Screen-reader announcements (what the keyboard selected, where the cursor is). */
   private announcer = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
@@ -126,7 +129,7 @@ export class App implements BoardHost {
   /** Set when keydown took a Space press for the board (pan or play/pause). */
   private spaceArmed = false;
   /**
-   * The keyboard's cell cursor (arrows move it, 1-6 or Enter place there).
+   * The keyboard's cell cursor (arrows move it, a kind's number key or Enter place there).
    * Shown only while the board has keyboard focus and nothing is selected.
    */
   private keyCell: { x: number; y: number } | null = null;
@@ -134,6 +137,8 @@ export class App implements BoardHost {
   private menuTarget: Hit | null = null;
   /** Show "tap anywhere for sound" when the next note plays while audio is locked. */
   private soundHint = false;
+  /** The example object last opened (so one that is not in EXAMPLES still counts as current). */
+  private openedExample: Example | null = null;
 
   private constructor(root: HTMLElement, network: Network, doc: DocInfo, settings: Settings) {
     this.root = root;
@@ -497,9 +502,16 @@ export class App implements BoardHost {
     this.setPlaying(true);
   }
 
-  /** The built-in example the current document came from, if any. */
+  /** The example the current document came from, if any. */
   get currentExample(): Example | undefined {
-    return this.store.doc.exampleId ? findExample(this.store.doc.exampleId) : undefined;
+    const id = this.store.doc.exampleId;
+    if (!id) return undefined;
+    return findExample(id) ?? (this.openedExample?.id === id ? this.openedExample : undefined);
+  }
+
+  /** The current example's keyboard controls, grouped by the neuron each key pokes. */
+  get exampleKeys(): KeyGroup[] {
+    return keyGroups(this.currentExample?.keys, (id) => this.store.index.byId.get(id)?.label);
   }
 
   poke(id: string, charge = 1): void {
@@ -745,6 +757,9 @@ export class App implements BoardHost {
 
   /** Apply an example's speed, autoplay and demo to the freshly loaded network. */
   private startExample(example: Example, animate: boolean): void {
+    this.openedExample = example;
+    // (The card rendered before this was known, for an example not in EXAMPLES.)
+    if (!findExample(example.id)) this.card.reset();
     this.store.setTool('select');
     this.runner.sim.reset();
     this.runner.speed = clampSpeed(example.speed);
@@ -1110,6 +1125,7 @@ export class App implements BoardHost {
         if (e.key === 'Escape') (e.target as HTMLElement).blur();
         return;
       }
+      if (this.exampleKey(e, onControl)) return;
       if (e.key === ' ') {
         if (onControl) return;
         e.preventDefault();
@@ -1190,6 +1206,28 @@ export class App implements BoardHost {
   }
 
   /**
+   * The open example's keyboard controls (say, arrow keys steering a game):
+   * a bound key pokes its neuron like a click, and takes priority over the
+   * app's own single-key shortcuts and arrow navigation while the example
+   * is open. A press while paused starts the run first. Buttons, switches
+   * and sliders keep the keys they use themselves. Returns true if the key
+   * was taken.
+   */
+  private exampleKey(e: KeyboardEvent, onControl: boolean): boolean {
+    const id = boundNeuron(this.currentExample?.keys, e, (n) => this.store.index.byId.has(n));
+    if (!id) return false;
+    if (onControl && (e.key === ' ' || e.key === 'Enter' || (e.target instanceof HTMLInputElement && e.key.startsWith('Arrow')))) return false;
+    e.preventDefault();
+    // Holding a key down pokes once, not at the keyboard's repeat rate.
+    if (e.repeat) return true;
+    if (!this.runner.playing) this.setPlaying(true);
+    this.poke(id);
+    const n = this.store.index.byId.get(id);
+    this.announce(`Pressed ${n?.label ? `“${n.label}”` : id}`);
+    return true;
+  }
+
+  /**
    * Arrow keys: nudge the selection; with nothing selected, move the cell
    * cursor while the board has keyboard focus, or pan the view.
    */
@@ -1243,10 +1281,10 @@ export class App implements BoardHost {
     this.invalidate();
   }
 
-  /** Enter and 1-6 act on the cursor's cell. Returns true if the key was used. */
+  /** Enter and the kinds' number keys (1 to 7) act on the cursor's cell. Returns true if the key was used. */
   private cursorKey(key: string, shift: boolean): boolean {
     const cell = this.keyCell!;
-    const kindIndex = '123456'.indexOf(key);
+    const kindIndex = key.length === 1 ? KIND_KEYS.indexOf(key) : -1;
     const there = this.store.index.byCell.get(cellKey(cell.x, cell.y));
     if (key === 'Enter' && !shift) {
       if (there) this.selectNeuron(there.id);
@@ -1301,10 +1339,10 @@ export class App implements BoardHost {
     if (this.keyCell) this.announce(this.describeCell(this.keyCell.x, this.keyCell.y));
   }
 
-  /** "Neuron “7”, cell 3, 4." or "Empty cell 3, 4: 1 to 6 place a neuron." */
+  /** "Neuron “7”, cell 3, 4." or "Empty cell 3, 4. Press 1 to 7 or Enter to place a Neuron." */
   private describeCell(x: number, y: number): string {
     const n = this.store.index.byCell.get(cellKey(x, y));
-    if (!n) return `Empty cell ${x}, ${y}. Press 1 to 6 or Enter to place a ${KIND_INFO[this.store.kind].name}.`;
+    if (!n) return `Empty cell ${x}, ${y}. Press 1 to ${NEURON_KINDS.length} or Enter to place a ${KIND_INFO[this.store.kind].name}.`;
     return `${KIND_INFO[n.kind].name}${n.label ? ` “${n.label}”` : ''}, cell ${x}, ${y}.`;
   }
 
@@ -1370,7 +1408,7 @@ export class App implements BoardHost {
       h('p', {
         text: matchMedia('(pointer: coarse)').matches
           ? 'Pick a neuron kind in the dock below, then tap the grid to place it. Drag from a neuron’s handle to another neuron to connect them.'
-          : 'Pick a neuron kind from the tools (keys 1–6) and click the grid to place it. Drag from one neuron to another to connect them.',
+          : `Pick a neuron kind from the tools (keys 1–${NEURON_KINDS.length}) and click the grid to place it. Drag from one neuron to another to connect them.`,
       }),
       h(
         'div',

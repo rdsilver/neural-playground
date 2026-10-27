@@ -4,10 +4,11 @@
 // hint fades out when it has been up unchanged for a while, so it can simply
 // be ignored.
 
-import { KIND_INFO } from '../../engine';
+import { KIND_INFO, NEURON_KINDS } from '../../engine';
 import type { App } from '../app';
 import { h } from '../dom';
 import { icons } from '../icons';
+import { keyHint } from '../keys';
 import { selectionSize } from '../store';
 import { tipped } from './tooltip';
 
@@ -96,7 +97,7 @@ export class Hud {
     const click = touch ? 'Tap' : 'Click';
     const lower = click.toLowerCase();
     const kind = KIND_INFO[store.kind].name;
-    if (app.keyCursorShown) return 'Arrows move the cursor · 1–6 place a neuron · Enter selects or places · N jumps to the next neuron';
+    if (app.keyCursorShown) return `Arrows move the cursor · 1–${NEURON_KINDS.length} place a neuron · Enter selects or places · N jumps to the next neuron`;
     // An empty board has its own card, except while placing.
     if (!store.network.neurons.length && !store.network.texts?.length && store.tool !== 'place') return '';
     if (runner.overloaded) return 'Paused: this network multiplies pulses without limit · R resets it';
@@ -132,6 +133,14 @@ export class Hud {
       return store.index.byId.get(hover.id)?.kind === 'timer'
         ? 'Timers fire on their own · Shift-click or right-click to inspect'
         : 'Click to poke (+1 charge) · Shift-click or right-click to inspect';
+    }
+    // An example played from the keyboard says which keys (keyboards only:
+    // touch screens press the keys on the board).
+    const keys = touch ? '' : keyHint(app.exampleKeys);
+    const spaceBound = !!keys && app.currentExample?.keys?.[' '] !== undefined;
+    if (keys && !selectionSize(store.selection)) {
+      if (runner.playing) return `Keys ${keys} · click a neuron to poke it${spaceBound ? '' : ' · Space pauses'}`;
+      return `Paused · press ${keys}${spaceBound ? '' : ' or Space'} to run`;
     }
     if (selectionSize(store.selection)) return touch ? 'Tap empty space to deselect' : 'Arrows move it · Delete removes it · Esc deselects';
     if (runner.playing) return touch ? 'Tap a neuron to poke it · drag to pan · long-press to inspect' : 'Click a neuron to poke it · Shift-click to inspect · Space pauses';

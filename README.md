@@ -30,6 +30,7 @@ Four rules, and everything else is built from them:
 | **Random** | Sends each pulse down just one of its connections, chosen at random. |
 | **Timer** | Fires on its own every few seconds, a set number of times or forever. |
 | **Note** | Plays a note when it fires. |
+| **Lamp** | A pixel that glows while it holds charge. A grid of them is a dot-matrix display. |
 
 ## Examples
 
@@ -62,11 +63,13 @@ cell to place it. To connect two neurons, use the Connect tool or drag from
 the small handle on a neuron's edge to another neuron (hold Shift for both
 directions). While the simulation runs, clicking a neuron pokes it;
 right-click, Shift-click or long-press to inspect it instead. Drag empty
-space to pan; scroll or pinch to zoom.
+space to pan; scroll or pinch to zoom. Examples with keys on the board can
+also be played from the keyboard (say, with the arrow keys): the notes card
+lists the keys.
 
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
-| `Space` | Play / pause | `1`–`6` | Pick a neuron type |
+| `Space` | Play / pause | `1`–`7` | Pick a neuron type |
 | `.` | Step to the next event | `V` `C` `T` `H` | Select, Connect, Text, Hand tools |
 | `R` | Reset | `N` / `Shift+N` | Select next / previous neuron |
 | `[` `]` | Slower / faster | `Enter` | Poke the selection |

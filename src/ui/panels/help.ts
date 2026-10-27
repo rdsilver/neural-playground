@@ -52,7 +52,7 @@ export class HelpDialog {
   constructor(private readonly app: App) {
     const close = h('button', { class: 'btn', type: 'button', html: icons.close, 'aria-label': 'Close help', onclick: () => this.el.close() });
     const keys = h('dl', { class: 'keys' });
-    /** One row: alternative shortcuts joined by "/", or a key range like 1–6 joined by "–". */
+    /** One row: alternative shortcuts joined by "/", or a key range like 1–7 joined by "–". */
     const row = (label: string, specs: string[], joiner = ' / ') => {
       const dd = h('dd');
       specs.forEach((spec, i) => {
@@ -61,13 +61,14 @@ export class HelpDialog {
       });
       keys.append(h('dt', { text: label }), dd);
     };
-    row('Place a neuron kind', ['1', '6'], ' – ');
+    const lastKind = String(NEURON_KINDS.length);
+    row('Place a neuron kind', ['1', lastKind], ' – ');
     for (const id of SHORTCUTS) {
       const c = app.commands.find((x) => x.id === id);
       if (c?.keys) row(c.title, c.keys.split(' ').slice(0, 2));
     }
     row('Move selection, or the cell cursor', ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'], ' ');
-    row('At the cell cursor: place a kind', ['1', '6'], ' – ');
+    row('At the cell cursor: place a kind', ['1', lastKind], ' – ');
     row('At the cell cursor: select or place', ['enter']);
     row('Context menu', ['shift+f10']);
     row('Cancel / deselect', ['escape']);

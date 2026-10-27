@@ -10,8 +10,9 @@ import type { App } from '../app';
 import { h } from '../dom';
 import { icons } from '../icons';
 import { describeNeuron } from '../describe';
+import { isSquare } from '../geometry';
 import { BLACK_KEYS, parseNote } from '../music';
-import { deleteItems, pairKey, reverseConnection, setTwoWay, updateNeuron, updateText } from '../netops';
+import { deleteItems, pairKey, reverseConnection, setTwoWay, updateNeuron, updateNeurons, updateText } from '../netops';
 import { drawKindIcon } from '../renderer';
 import { selectionSize } from '../store';
 import { iconButton, prop, section, segmented, stacked, stepper, textInput, toggle } from './controls';
@@ -226,7 +227,7 @@ export class Inspector {
             max: 9999,
             onChange: (v) => edit({ threshold: Math.round(v) }, digit ? 'Change base' : 'Change threshold', 'threshold'),
           }),
-          digit ? 'It carries when its count reaches this: 10 counts in decimal.' : 'Charge it needs to fire.',
+          digit ? 'It carries when its count reaches this: 10 counts in decimal.' : n.kind === 'lamp' ? 'It glows below this; at this charge it fires and goes dark.' : 'Charge it needs to fire.',
           'f-threshold',
         ),
       );
@@ -358,7 +359,7 @@ export class Inspector {
           h(
             'li',
             {},
-            h('span', { class: `swatch${other.kind === 'character' ? ' square' : ''}`, style: `background:${this.app.palette.kinds[other.kind]}` }),
+            h('span', { class: `swatch${isSquare(other.kind) ? ' square' : ''}`, style: `background:${this.app.palette.kinds[other.kind]}` }),
             h(
               'button',
               { class: 'grow btn small', style: 'justify-content:flex-start;padding:0 2px', type: 'button', 'data-field': `goto-${id}`, onclick: () => store.selectOnly('neuron', id) },
@@ -409,7 +410,7 @@ export class Inspector {
       h(
         'button',
         { class: 'btn small outline', type: 'button', style: 'justify-content:flex-start', 'data-field': `end-${n.id}`, onclick: () => store.selectOnly('neuron', n.id) },
-        h('span', { class: `swatch${n.kind === 'character' ? ' square' : ''}`, style: `background:${this.app.palette.kinds[n.kind]}` }),
+        h('span', { class: `swatch${isSquare(n.kind) ? ' square' : ''}`, style: `background:${this.app.palette.kinds[n.kind]}` }),
         `${n.label ? `“${n.label}”` : KIND_INFO[n.kind].name} `,
         h('span', { class: 'muted', text: n.id }),
       );
@@ -494,9 +495,8 @@ export class Inspector {
     const thresholds = new Set(neurons.filter((n) => n.kind !== 'timer').map((n) => n.threshold));
     const common = thresholds.size === 1 ? [...thresholds][0]! : null;
     const editAll = (patch: Parameters<typeof updateNeuron>[2], label: string, key?: string) => {
-      let net = store.network;
-      for (const n of neurons) if (patch.kind || n.kind !== 'timer') net = updateNeuron(net, n.id, patch);
-      store.commit(net, label, key);
+      const ids = new Set(neurons.filter((n) => patch.kind || n.kind !== 'timer').map((n) => n.id));
+      store.commit(updateNeurons(store.network, ids, patch), label, key);
     };
     const summary = h('div', { class: 'legend-inline', style: 'margin:0 0 12px' });
     for (const [kind, count] of counts) summary.append(h('span', {}, h('i', { style: `background:${app.palette.kinds[kind]}` }), `${count} ${KIND_INFO[kind].name}${count === 1 ? '' : 's'}`));

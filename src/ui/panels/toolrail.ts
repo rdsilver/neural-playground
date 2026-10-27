@@ -1,8 +1,8 @@
 // The tool panel. On wide screens a floating vertical island on the left:
-// labelled editing tools on top, the six labelled neuron kinds below
-// (picking a kind switches to placing it). On phones it becomes the top row
-// of the bottom dock: icon tools, one button that opens a sheet of the six
-// labelled kinds, and undo / redo.
+// labelled editing tools on top, the labelled neuron kinds below (picking a
+// kind switches to placing it). On phones it becomes the top row of the
+// bottom dock: icon tools, one button that opens a sheet of the labelled
+// kinds, and undo / redo.
 
 import { KIND_INFO, NEURON_KINDS, type NeuronKind } from '../../engine';
 import type { App } from '../app';

@@ -4,6 +4,13 @@
 // real milliseconds so they look the same at every simulation speed. With
 // prefers-reduced-motion it drops the decorative motion (pulse trails,
 // growing rings, floating "+1"s) and keeps only what carries meaning.
+//
+// Big networks (thousands of neurons and wires, a display of Lamps) stay
+// smooth: wire geometry is computed once per network, what holds still while
+// the simulation runs (resting wires; neurons' cores, ring tracks and labels)
+// is kept as bitmaps while the view holds still, and the rest is drawn with
+// as few style changes as possible, each shape in its own draw call where a
+// canvas is fastest that way.
 
 import {
   digitText,
@@ -18,10 +25,11 @@ import {
 } from '../engine';
 import type { Bounds, Camera } from './camera';
 import { prefersReducedMotion } from './dom';
-import { connectionPath, endTangent, isSquare, pathBounds, pathLength, type ConnectionPath } from './geometry';
+import { connectionPath, endTangent, isSquare, pathLength, type ConnectionPath } from './geometry';
 import { cellKey, pairKey, type NetIndex } from './netops';
 import type { Selection, Tool } from './store';
-import { withAlpha, type Palette } from './theme';
+import { mixColors, withAlpha, type Palette } from './theme';
+import { CORNER_BL, CORNER_BR, CORNER_TL, CORNER_TR, lampCorners, restingStyle, wireStyle } from './wires';
 
 const TAU = Math.PI * 2;
 const FLASH_MS = 340;
@@ -32,6 +40,31 @@ const TAP_MS = 650;
 const TRAIL_CELLS = 0.5;
 const UI_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const MONO_FONT = 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace';
+
+/**
+ * Wires per stroke() and arrowheads per fill(). Canvas rasterizes a path as
+ * one shape, and thousands of overlapping contours in one path (say, every
+ * arrow converging on a display) cost far more than the same work split
+ * into batches: hundreds of milliseconds instead of a few.
+ */
+const STROKE_BATCH = 256;
+const FILL_BATCH = 48;
+/** From this many wires (round neurons) on, they are kept as a bitmap while the view holds still. */
+const LAYER_MIN_WIRES = 400;
+const LAYER_MIN_NEURONS = 300;
+/** Frames the view must hold still before the layers are built. */
+const STILL_FRAMES = 3;
+/**
+ * Wires into lamps: how far their colour fades towards the board's, and
+ * the zoom (px per cell) from which they get arrowheads. They are drawn one
+ * device pixel wide in an opaque colour, so hundreds of them converging on
+ * a display stay faint where they overlap (and stay cheap to draw).
+ */
+const FAINT_FADE = 0.5;
+const FAINT_ARROW_SCALE = 24;
+/** Radius of a Lamp's LED and of its bloom, in cells. */
+const LED_RADIUS = 0.36;
+const GLOW_RADIUS = 1.05;
 
 export type Hover =
   | { type: 'neuron'; id: string }
@@ -78,18 +111,81 @@ interface Ripple {
   charge: number;
 }
 
-/** Connection paths by pairKey(from, to), and by source then target (pulse lookup and hit-testing). */
+/** A connection's path plus what drawing and hit-testing need, computed once per network. */
+export interface Wire extends ConnectionPath {
+  from: string;
+  to: string;
+  /** Ends at a Lamp: drawn faint unless the lamp or the source is in focus (see wireStyle). */
+  toLamp: boolean;
+  /** One-way connections are straight; each half of a two-way pair is bowed. */
+  straight: boolean;
+  /** Bounding box, for culling and hit-testing. */
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  /** Unit direction at the arrow tip, and the drawable length (world units). */
+  dx: number;
+  dy: number;
+  len: number;
+}
+
+/** A lamp's tile on a screen: its (possibly dragged) cell and which corners are rounded. */
+export interface LampTile {
+  n: NeuronSpec;
+  x: number;
+  y: number;
+  corners: number;
+}
+
+/**
+ * Geometry for the current network, cached until it changes: connection
+ * paths by pairKey(from, to), by source then target (pulse lookup and
+ * hit-testing) and as a flat list, plus the lamps' screen tiles.
+ */
 export interface PathSet {
-  byKey: Map<string, ConnectionPath>;
-  byFrom: Map<string, Map<string, ConnectionPath>>;
+  byKey: Map<string, Wire>;
+  byFrom: Map<string, Map<string, Wire>>;
+  wires: Wire[];
+  lamps: LampTile[];
 }
 
 interface PulseLayout {
   /** Flat [headX, headY, tailX, tailY, …] screen positions of excitatory pulses. */
   pos: number[];
   neg: number[];
-  active: Set<ConnectionPath>;
+  /** Wires carrying a pulse. */
+  active: Set<Wire>;
 }
+
+/** A neuron to draw this frame, at its screen centre. */
+interface NeuronItem {
+  n: NeuronSpec;
+  cx: number;
+  cy: number;
+  flash: number;
+}
+
+/** Round neurons of one kind to draw this frame: specs, and their screen centres as x, y pairs. */
+interface RoundBatch {
+  ns: NeuronSpec[];
+  xy: number[];
+}
+
+/** Is a charge ring drawn as one segment per unit of threshold (or as a plain ring)? */
+const isSegmented = (threshold: number, r: number, w: number) => threshold > 1 && threshold <= 24 && (r * TAU) / threshold > w * 1.6;
+
+/** Part of the board kept as a bitmap while the view holds still, and what it was drawn for. */
+interface Layer {
+  canvas: HTMLCanvasElement;
+  key: string;
+  /** The paths or network it shows. */
+  of: object | null;
+  palette: Palette | null;
+  selection?: Selection;
+}
+
+const newLayer = (): Layer => ({ canvas: document.createElement('canvas'), key: '', of: null, palette: null });
 
 export interface TextBox {
   x: number;
@@ -108,8 +204,32 @@ export class Renderer {
   private ripples: Ripple[] = [];
   private taps: { id: string; start: number }[] = [];
   private reduced = prefersReducedMotion();
-  private pathCache: { network: Network | null; paths: PathSet } = { network: null, paths: { byKey: new Map(), byFrom: new Map() } };
+  private pathCache: { network: Network | null; paths: PathSet } = { network: null, paths: { byKey: new Map(), byFrom: new Map(), wires: [], lamps: [] } };
   private widthCache = new Map<string, number>();
+  /** Camera (and canvas size) of the previous frame, and for how many frames it has not changed. */
+  private lastViewKey = '';
+  private stillFrames = 0;
+  private wireLayer: Layer | null = null;
+  private neuronLayer: Layer | null = null;
+  private singles: NeuronItem[] = [];
+  private flashing: NeuronItem[] = [];
+  /** Bloom and LED sprites, drawn for the current palette. */
+  private sprites: { palette: Palette; glow: HTMLCanvasElement; core: HTMLCanvasElement } | null = null;
+  /** The lit lamps' bloom at low resolution (see drawBloom). */
+  private bloom: { canvas: HTMLCanvasElement; key: string; palette: Palette | null } | null = null;
+  /** withAlpha() results: the same few colours are asked for thousands of times a frame. */
+  private alphaCache = new Map<string, string>();
+  private faintWire = '';
+  // Scratch lists reused every frame (no per-frame allocation for big networks).
+  private scratch = { base: [] as Wire[], faint: [] as Wire[], active: [] as Wire[], in: [] as Wire[], out: [] as Wire[] };
+  private lampItems: NeuronItem[] = [];
+  private lampOn: NeuronItem[] = [];
+  private lampOff: NeuronItem[] = [];
+  private lampNeg: NeuronItem[] = [];
+  private activeWires = new Set<Wire>();
+  /** Round neurons to draw this frame, per kind, with their screen x, y (see drawRoundBatch). */
+  private roundBatches = new Map<NeuronKind, RoundBatch>();
+  private focus = new Set<string>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
@@ -118,6 +238,21 @@ export class Renderer {
 
   setPalette(palette: Palette): void {
     this.palette = palette;
+    this.alphaCache.clear();
+    this.faintWire = mixColors(palette.wire, palette.canvas, FAINT_FADE);
+  }
+
+  /** withAlpha, memoised (alpha rounded to 1/100). */
+  private alpha(hex: string, a: number): string {
+    const q = Math.round(a * 100);
+    const key = `${hex}|${q}`;
+    let c = this.alphaCache.get(key);
+    if (c === undefined) {
+      if (this.alphaCache.size > 4000) this.alphaCache.clear();
+      c = withAlpha(hex, q / 100);
+      this.alphaCache.set(key, c);
+    }
+    return c;
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -207,17 +342,55 @@ export class Renderer {
       this.drawText(moved, cam);
     }
 
+    // Wires (resting, then those carrying pulses), the lamps' screens over
+    // them, wires in focus over the screens, then pulses: a display hides
+    // the wiring behind it, but pulses still write across it like a beam.
     const pulses = this.layoutPulses(scene, paths, view);
-    this.drawWires(scene, paths.byKey, view, pulses.active);
+    const focus = this.focusSet(scene);
+    // The view has held still for a few frames: the cached layers can be
+    // used (while it pans or zooms, building them every frame would only
+    // add work).
+    const viewKey = `${cam.x}|${cam.y}|${s}|${this.width}|${this.height}|${this.dpr}`;
+    this.stillFrames = !move && viewKey === this.lastViewKey ? this.stillFrames + 1 : 0;
+    this.lastViewKey = move ? '' : viewKey;
+    const steady = this.stillFrames >= STILL_FRAMES;
+    this.drawRestingWires(scene, paths, view, steady);
+    this.drawLiveWires(scene, paths, view, pulses.active, focus, false);
+    this.drawScreens(scene, paths.lamps, view);
+    this.drawLiveWires(scene, paths, view, pulses.active, focus, true);
     this.drawPulses(scene, pulses);
 
+    const lamps = this.lampItems;
+    lamps.length = 0;
+    // Round neurons are drawn in batches, a kind at a time (see drawRoundBatch).
+    const batch = this.roundBatches;
+    for (const b of batch.values()) b.ns.length = b.xy.length = 0;
+    // Digits and timers one by one, after the round ones; flashing round
+    // neurons get their flash drawn over them.
+    const singles = this.singles;
+    const flashes = this.flashing;
+    singles.length = flashes.length = 0;
+    const flashing = this.flashes.size > 0;
     for (const n of scene.network.neurons) {
       const at = pos(n);
       if (at.x + 1 < view.minX - 1 || at.x > view.maxX + 1 || at.y + 1 < view.minY - 1 || at.y > view.maxY + 1) continue;
-      const sc = cam.toScreen(at.x + 0.5, at.y + 0.5);
-      const flash = this.flashLevel(n.id, now);
-      this.drawNeuron(n, sc.x, sc.y, s, scene, flash);
+      const cx = (at.x + 0.5 - cam.x) * s;
+      const cy = (at.y + 0.5 - cam.y) * s;
+      const flash = flashing ? this.flashLevel(n.id, now) : 0;
+      if (n.kind === 'lamp') lamps.push({ n, cx, cy, flash });
+      else if (n.kind === 'timer' || isSquare(n.kind)) singles.push({ n, cx, cy, flash });
+      else {
+        let b = batch.get(n.kind);
+        if (!b) batch.set(n.kind, (b = { ns: [], xy: [] }));
+        b.ns.push(n);
+        b.xy.push(cx, cy);
+        if (flash > 0) flashes.push({ n, cx, cy, flash });
+      }
     }
+    this.drawRoundNeurons(batch, s, scene, steady);
+    for (const it of flashes) this.drawRoundFlash(it.n, it.cx, it.cy, s, scene, it.flash);
+    for (const it of singles) this.drawNeuron(it.n, it.cx, it.cy, s, scene, it.flash);
+    this.drawLamps(lamps, s, scene);
 
     this.drawOverlays(scene, pos, now);
     this.drawTaps(scene, now);
@@ -275,76 +448,231 @@ export class Renderer {
     }
   }
 
-  private drawWires(scene: Scene, paths: Map<string, ConnectionPath>, view: Bounds, active: ReadonlySet<ConnectionPath>): void {
-    const { palette: p } = this;
-    const cam = scene.camera;
-
-    // Wires touching the selected / hovered neurons are highlighted.
-    const focus = new Set(scene.selection.neurons.size <= 40 ? scene.selection.neurons : []);
+  /** Neurons whose wires are highlighted: the hovered one and a (not huge) selection. */
+  private focusSet(scene: Scene): ReadonlySet<string> {
+    const focus = this.focus;
+    focus.clear();
+    if (scene.selection.neurons.size <= 40) for (const id of scene.selection.neurons) focus.add(id);
     if (scene.hover?.type === 'neuron' || scene.hover?.type === 'handle') focus.add(scene.hover.id);
-    const sel = scene.selection.connection;
-    const selKey = sel ? pairKey(sel.from, sel.to) : '';
-    const hov = scene.hover?.type === 'connection' ? pairKey(scene.hover.from, scene.hover.to) : '';
-
-    const groups: Record<'base' | 'active' | 'in' | 'out', ConnectionPath[]> = { base: [], active: [], in: [], out: [] };
-    for (const c of scene.network.connections) {
-      const key = pairKey(c.from, c.to);
-      const path = paths.get(key);
-      if (!path) continue;
-      const b = pathBounds(path);
-      if (b.maxX < view.minX || b.minX > view.maxX || b.maxY < view.minY || b.minY > view.maxY) continue;
-      if (key === selKey || key === hov) continue;
-      if (focus.has(c.from)) groups.out.push(path);
-      else if (focus.has(c.to)) groups.in.push(path);
-      else if (active.has(path)) groups.active.push(path);
-      else groups.base.push(path);
-    }
-    const width = Math.max(1, cam.scale * 0.034);
-    this.strokeWires(groups.base, cam, p.wire, width);
-    this.strokeWires(groups.active, cam, p.wireActive, width);
-    this.strokeWires(groups.in, cam, p.wireIn, width * 1.15);
-    this.strokeWires(groups.out, cam, p.accent, width * 1.3);
-    if (hov && paths.get(hov)) this.strokeWires([paths.get(hov)!], cam, withAlpha(p.accent, 0.75), width * 1.8);
-    if (selKey && paths.get(selKey)) this.strokeWires([paths.get(selKey)!], cam, p.accent, width * 2.2);
+    return focus;
   }
 
-  /** Stroke a batch of wires in one colour, then fill their arrowheads in one go. */
-  private strokeWires(paths: ConnectionPath[], cam: Camera, color: string, width: number): void {
-    if (!paths.length) return;
-    const { ctx } = this;
-    const s = cam.scale;
-    const arrowLen = Math.min(11, Math.max(4.5, s * 0.2)) * (width > 2 ? 1.15 : 1);
-    ctx.beginPath();
-    const heads: number[] = [];
-    for (const path of paths) {
-      const a = cam.toScreen(path.x0, path.y0);
-      const c = cam.toScreen(path.cx, path.cy);
-      const e = cam.toScreen(path.x1, path.y1);
-      const len = pathLength(path) * s;
-      const dir = endTangent(path);
-      const L = Math.min(arrowLen, len * 0.9);
-      // Stop the line inside the arrowhead so its tip stays sharp.
-      const back = Math.min(L * 0.6, len);
-      ctx.moveTo(a.x, a.y);
-      ctx.quadraticCurveTo(c.x, c.y, e.x - dir.x * back, e.y - dir.y * back);
-      if (s >= 7) heads.push(e.x, e.y, dir.x, dir.y, L);
+  private wireWidth(s: number): number {
+    return Math.max(1, s * 0.034);
+  }
+
+  /**
+   * Every wire in its resting style (plain, or faint into a lamp). Big
+   * networks keep this as a bitmap while the view holds still, so a running
+   * board with thousands of wires redraws only what moves: while the view
+   * pans or zooms they are drawn directly, once it has held still for a few
+   * frames (STILL_FRAMES) the layer is built, and later frames copy it.
+   */
+  private drawRestingWires(scene: Scene, paths: PathSet, view: Bounds, steady: boolean): void {
+    const cam = scene.camera;
+    if (!steady || paths.wires.length < LAYER_MIN_WIRES) {
+      this.strokeResting(this.ctx, paths, cam, view);
+      return;
     }
+    const layer = (this.wireLayer ??= newLayer());
+    const key = this.lastViewKey;
+    if (layer.key !== key || layer.of !== paths || layer.palette !== this.palette) {
+      this.paintLayer(layer, () => this.strokeResting(this.ctx, paths, cam, view));
+      layer.key = key;
+      layer.of = paths;
+    }
+    this.blit(layer);
+  }
+
+  /** Redraw a layer: `paint` draws into it through this.ctx, at the board's size and scale. */
+  private paintLayer(layer: Layer, paint: () => void): void {
+    const c = layer.canvas;
+    if (c.width !== this.canvas.width || c.height !== this.canvas.height) {
+      c.width = this.canvas.width;
+      c.height = this.canvas.height;
+    }
+    const lctx = c.getContext('2d')!;
+    lctx.setTransform(1, 0, 0, 1, 0, 0);
+    lctx.clearRect(0, 0, c.width, c.height);
+    lctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    const main = this.ctx;
+    this.ctx = lctx;
+    try {
+      paint();
+    } finally {
+      this.ctx = main;
+    }
+    layer.palette = this.palette;
+  }
+
+  private blit(layer: Layer): void {
+    const { ctx } = this;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(layer.canvas, 0, 0);
+    ctx.restore();
+  }
+
+  /**
+   * Round neurons. Big networks keep everything about them that holds still
+   * while running (cores, ring tracks, labels) as a bitmap while the view
+   * holds still, and draw only their charge live.
+   */
+  private drawRoundNeurons(batch: ReadonlyMap<NeuronKind, RoundBatch>, s: number, scene: Scene, steady: boolean): void {
+    let count = 0;
+    for (const b of batch.values()) count += b.ns.length;
+    if (!steady || count < LAYER_MIN_NEURONS) {
+      this.drawRoundBatch(batch, s, scene, 'all');
+      return;
+    }
+    // Labels depend on focus (a hovered Note shows its note name).
+    const hover = scene.hover?.type === 'neuron' ? scene.hover.id : '';
+    const key = `${this.lastViewKey}|${hover}`;
+    const layer = (this.neuronLayer ??= newLayer());
+    if (layer.key !== key || layer.of !== scene.network || layer.palette !== this.palette || layer.selection !== scene.selection) {
+      this.paintLayer(layer, () => this.drawRoundBatch(batch, s, scene, 'static'));
+      layer.key = key;
+      layer.of = scene.network;
+      layer.selection = scene.selection;
+    }
+    this.blit(layer);
+    this.drawRoundBatch(batch, s, scene, 'charge');
+  }
+
+  /** A round neuron's fire flash, over it: a glow around it, a brighter core, its label in contrast. */
+  private drawRoundFlash(n: NeuronSpec, cx: number, cy: number, s: number, scene: Scene, flash: number): void {
+    const { ctx } = this;
+    const color = this.palette.kinds[n.kind];
+    const core = s * 0.3;
+    const outer = s * 0.395 + s * (this.reduced ? 0.08 : 0.06 + 0.16 * (1 - flash));
+    ctx.beginPath();
+    ctx.arc(cx, cy, outer, 0, TAU);
+    ctx.moveTo(cx + core, cy);
+    ctx.arc(cx, cy, core, 0, TAU, true);
+    ctx.fillStyle = this.alpha(color, 0.28 * flash);
+    ctx.fill('evenodd');
+    ctx.beginPath();
+    ctx.arc(cx, cy, core, 0, TAU);
+    ctx.fillStyle = this.alpha(color, 0.8 * flash);
+    ctx.fill();
+    if (s >= 14 && flash > 0.45) this.drawRoundDetails(n, cx, cy, s, scene, flash, 0, false, 0);
+  }
+
+  private strokeResting(ctx: CanvasRenderingContext2D, paths: PathSet, cam: Camera, view: Bounds): void {
+    const { base, faint } = this.scratch;
+    base.length = 0;
+    faint.length = 0;
+    for (const w of paths.wires) {
+      if (w.maxX < view.minX || w.minX > view.maxX || w.maxY < view.minY || w.minY > view.maxY) continue;
+      (restingStyle(w.toLamp) === 'faint' ? faint : base).push(w);
+    }
+    const s = cam.scale;
+    const width = this.wireWidth(s);
+    this.strokeWires(ctx, faint, cam, this.faintWire, 1 / this.dpr, s >= FAINT_ARROW_SCALE);
+    this.strokeWires(ctx, base, cam, this.palette.wire, width, s >= 7);
+    base.length = 0;
+    faint.length = 0;
+  }
+
+  /**
+   * Wires drawn over the resting ones: under the lamp screens, those
+   * carrying a pulse; over them, those of focused neurons and the hovered
+   * and selected wire. Only these wires are visited (via the network
+   * index), never the whole list.
+   */
+  private drawLiveWires(scene: Scene, paths: PathSet, view: Bounds, active: ReadonlySet<Wire>, focus: ReadonlySet<string>, over: boolean): void {
+    const { palette: p, ctx } = this;
+    const cam = scene.camera;
+    const s = cam.scale;
+    const width = this.wireWidth(s);
+    const visible = (w: Wire) => !(w.maxX < view.minX || w.minX > view.maxX || w.maxY < view.minY || w.minY > view.maxY);
+    const sel = scene.selection.connection;
+    const selWire = sel ? paths.byKey.get(pairKey(sel.from, sel.to)) : undefined;
+    const hov = scene.hover?.type === 'connection' ? paths.byKey.get(pairKey(scene.hover.from, scene.hover.to)) : undefined;
+    if (!over) {
+      const list = this.scratch.active;
+      list.length = 0;
+      for (const w of active) {
+        if (w !== selWire && w !== hov && wireStyle(w.from, w.to, w.toLamp, focus, true) === 'active' && visible(w)) list.push(w);
+      }
+      this.strokeWires(ctx, list, cam, p.wireActive, width, s >= 7);
+      list.length = 0;
+      return;
+    }
+    const ins = this.scratch.in;
+    const outs = this.scratch.out;
+    ins.length = 0;
+    outs.length = 0;
+    for (const id of focus) {
+      for (const to of scene.index.outgoing.get(id) ?? []) {
+        const w = paths.byFrom.get(id)?.get(to);
+        if (w && w !== selWire && w !== hov && visible(w)) outs.push(w);
+      }
+      for (const from of scene.index.incoming.get(id) ?? []) {
+        // A wire between two focused neurons is drawn once, as outgoing.
+        if (focus.has(from)) continue;
+        const w = paths.byFrom.get(from)?.get(id);
+        if (w && w !== selWire && w !== hov && visible(w)) ins.push(w);
+      }
+    }
+    this.strokeWires(ctx, ins, cam, p.wireIn, width * 1.15, s >= 7);
+    this.strokeWires(ctx, outs, cam, p.accent, width * 1.3, s >= 7);
+    ins.length = 0;
+    outs.length = 0;
+    if (hov) this.strokeWires(ctx, [hov], cam, this.alpha(p.accent, 0.75), width * 1.8, true);
+    if (selWire) this.strokeWires(ctx, [selWire], cam, p.accent, width * 2.2, true);
+  }
+
+  /** Stroke wires in one colour (in batches, see STROKE_BATCH), then fill their arrowheads. */
+  private strokeWires(ctx: CanvasRenderingContext2D, wires: readonly Wire[], cam: Camera, color: string, width: number, arrows: boolean): void {
+    if (!wires.length) return;
+    const s = cam.scale;
+    const ox = cam.x;
+    const oy = cam.y;
+    const arrowLen = Math.min(11, Math.max(4.5, s * 0.2)) * (width > 2 ? 1.15 : 1);
     ctx.strokeStyle = color;
     ctx.lineWidth = width;
     ctx.lineCap = 'round';
-    ctx.stroke();
     ctx.beginPath();
-    for (let i = 0; i < heads.length; i += 5) {
-      const [x, y, dx, dy, L] = [heads[i]!, heads[i + 1]!, heads[i + 2]!, heads[i + 3]!, heads[i + 4]!];
+    let n = 0;
+    for (const w of wires) {
+      const len = w.len * s;
+      // Stop the line inside the arrowhead so its tip stays sharp.
+      const back = arrows ? Math.min(Math.min(arrowLen, len * 0.9) * 0.6, len) : 0;
+      const ex = (w.x1 - ox) * s - w.dx * back;
+      const ey = (w.y1 - oy) * s - w.dy * back;
+      ctx.moveTo((w.x0 - ox) * s, (w.y0 - oy) * s);
+      if (w.straight) ctx.lineTo(ex, ey);
+      else ctx.quadraticCurveTo((w.cx - ox) * s, (w.cy - oy) * s, ex, ey);
+      if (++n === STROKE_BATCH) {
+        ctx.stroke();
+        ctx.beginPath();
+        n = 0;
+      }
+    }
+    if (n) ctx.stroke();
+    if (!arrows) return;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    n = 0;
+    for (const w of wires) {
+      const L = Math.min(arrowLen, w.len * s * 0.9);
       const hw = L * 0.52;
+      const x = (w.x1 - ox) * s;
+      const y = (w.y1 - oy) * s;
+      const { dx, dy } = w;
       ctx.moveTo(x, y);
       ctx.lineTo(x - dx * L - dy * hw, y - dy * L + dx * hw);
       ctx.lineTo(x - dx * L * 0.78, y - dy * L * 0.78);
       ctx.lineTo(x - dx * L + dy * hw, y - dy * L - dx * hw);
       ctx.closePath();
+      if (++n === FILL_BATCH) {
+        ctx.fill();
+        ctx.beginPath();
+        n = 0;
+      }
     }
-    ctx.fillStyle = color;
-    ctx.fill();
+    if (n) ctx.fill();
   }
 
   /**
@@ -359,7 +687,8 @@ export class Renderer {
     const sim = scene.sim;
     const pos: number[] = [];
     const neg: number[] = [];
-    const active = new Set<ConnectionPath>();
+    const active = this.activeWires;
+    active.clear();
     for (const pulse of sim.pulses()) {
       const path = paths.byFrom.get(pulse.from)?.get(pulse.to);
       if (!path) continue;
@@ -389,6 +718,8 @@ export class Renderer {
     const cheap = count > 8000;
     // Two passes fake a fading tail: the whole tail thin and faint, the half
     // nearest the head wider. Additive blending makes it glow on dark boards.
+    // Each trail and head is its own draw: a canvas draws a lone line or dot
+    // much faster than one path of hundreds of them (dense screens most).
     const trails = (list: number[], color: string) => {
       ctx.save();
       ctx.globalCompositeOperation = p.glowBlend;
@@ -398,48 +729,264 @@ export class Renderer {
         [1, 0.9],
         [0.45, 1.5],
       ] as const) {
-        ctx.beginPath();
+        ctx.lineWidth = core * width;
         for (let i = 0; i < list.length; i += 4) {
           const hx = list[i]!;
           const hy = list[i + 1]!;
+          ctx.beginPath();
           ctx.moveTo(hx + (list[i + 2]! - hx) * reach, hy + (list[i + 3]! - hy) * reach);
           ctx.lineTo(hx, hy);
+          ctx.stroke();
         }
-        ctx.lineWidth = core * width;
-        ctx.stroke();
       }
       ctx.restore();
     };
-    const heads = (list: number[], r: number) => {
-      ctx.beginPath();
+    /** Heads: one draw each (fill, and the outline for inhibitory pulses), or squares in one path for crowds. */
+    const heads = (list: number[], r: number, outline: boolean) => {
+      if (cheap) {
+        ctx.beginPath();
+        for (let i = 0; i < list.length; i += 4) ctx.rect(list[i]! - r, list[i + 1]! - r, r * 2, r * 2);
+        ctx.fill();
+        if (outline) ctx.stroke();
+        return;
+      }
       for (let i = 0; i < list.length; i += 4) {
-        if (cheap) ctx.rect(list[i]! - r, list[i + 1]! - r, r * 2, r * 2);
-        else {
-          ctx.moveTo(list[i]! + r, list[i + 1]!);
-          ctx.arc(list[i]!, list[i + 1]!, r, 0, TAU);
-        }
+        ctx.beginPath();
+        ctx.arc(list[i]!, list[i + 1]!, r, 0, TAU);
+        ctx.fill();
+        if (outline) ctx.stroke();
       }
     };
     if (pos.length) {
       if (!plain) trails(pos, p.pulsePosGlow);
-      heads(pos, core);
       ctx.fillStyle = p.pulsePos;
-      ctx.fill();
+      heads(pos, core, false);
     }
     if (neg.length) {
       if (!plain) trails(neg, p.pulseNegGlow);
-      heads(neg, core * 1.05);
       ctx.fillStyle = p.canvas;
-      ctx.fill();
       ctx.lineWidth = Math.max(1.4, s * 0.04);
       ctx.strokeStyle = p.pulseNeg;
-      ctx.stroke();
+      heads(neg, core * 1.05, true);
     }
   }
 
   private drawNeuron(n: NeuronSpec, cx: number, cy: number, s: number, scene: Scene, flash: number): void {
-    if (isSquare(n.kind)) this.drawDigit(n, cx, cy, s, scene, flash);
+    if (n.kind === 'lamp') {
+      // One lamp on its own (a placement ghost): its tile, then its LED.
+      const { ctx } = this;
+      ctx.beginPath();
+      ctx.roundRect(cx - s / 2, cy - s / 2, s, s, Math.min(s * 0.2, 10));
+      ctx.fillStyle = this.palette.lampScreen;
+      ctx.fill();
+      this.drawLamps([{ n, cx, cy, flash }], s, scene);
+    } else if (isSquare(n.kind)) this.drawDigit(n, cx, cy, s, scene, flash);
     else this.drawRound(n, cx, cy, s, scene, flash);
+  }
+
+  /**
+   * The dark screen behind lamps: a whole-cell tile per lamp, all in one
+   * path so neighbouring tiles merge into one panel without seams, rounded
+   * only at the panel's outer corners.
+   */
+  private drawScreens(scene: Scene, tiles: readonly LampTile[], view: Bounds): void {
+    if (!tiles.length) return;
+    const { ctx } = this;
+    const cam = scene.camera;
+    const s = cam.scale;
+    const r = Math.min(s * 0.2, 10);
+    // Tiles overlap their right and bottom neighbours by a hair, so
+    // anti-aliasing never shows a seam between them.
+    const size = s + Math.min(0.5, s * 0.05);
+    ctx.beginPath();
+    for (const t of tiles) {
+      if (t.x + 1 < view.minX || t.x > view.maxX || t.y + 1 < view.minY || t.y > view.maxY) continue;
+      const x = (t.x - cam.x) * s;
+      const y = (t.y - cam.y) * s;
+      const c = t.corners;
+      if (!c || s < 4) ctx.rect(x, y, size, size);
+      else ctx.roundRect(x, y, size, size, [c & CORNER_TL ? r : 0, c & CORNER_TR ? r : 0, c & CORNER_BR ? r : 0, c & CORNER_BL ? r : 0]);
+    }
+    ctx.fillStyle = this.palette.lampScreen;
+    ctx.fill();
+  }
+
+  /**
+   * Lamps as LEDs on their screen: unlit ones dark with a faint rim (a red
+   * rim when their charge is negative), lit ones amber with a hot centre
+   * and a soft bloom that runs into lit neighbours, so a lit row reads as
+   * one bright stroke. Drawn in a few batched paths whatever the count; at
+   * low zoom just filled dots.
+   */
+  private drawLamps(items: readonly NeuronItem[], s: number, scene: Scene): void {
+    if (!items.length) return;
+    const { ctx, palette: p } = this;
+    const on = this.lampOn;
+    const off = this.lampOff;
+    const neg = this.lampNeg;
+    on.length = off.length = neg.length = 0;
+    for (const it of items) {
+      const c = scene.sim.charge(it.n.id);
+      (c > 0 ? on : c < 0 ? neg : off).push(it);
+    }
+    const r = s * LED_RADIUS;
+    /** Fill (and/or stroke) a dot per lamp, in the current styles: one draw each, as a canvas draws lone circles fastest; tiny squares in one path when zoomed far out. */
+    const dots = (list: readonly NeuronItem[], radius: number, fill: boolean, stroke: boolean) => {
+      if (s < 4) {
+        ctx.beginPath();
+        for (const it of list) ctx.rect(it.cx - radius, it.cy - radius, radius * 2, radius * 2);
+        if (fill) ctx.fill();
+        if (stroke) ctx.stroke();
+        return;
+      }
+      for (const it of list) {
+        ctx.beginPath();
+        ctx.arc(it.cx, it.cy, radius, 0, TAU);
+        if (fill) ctx.fill();
+        if (stroke) ctx.stroke();
+      }
+    };
+
+    // Unlit LEDs with a faint rim; negative ones tinted, with a red rim.
+    const rim = Math.max(1, s * 0.035);
+    if (off.length) {
+      ctx.fillStyle = p.lampOff;
+      ctx.lineWidth = rim;
+      ctx.strokeStyle = p.lampRim;
+      if (s >= 8) {
+        dots(off, r, true, false);
+        dots(off, r - rim / 2, false, true);
+      } else dots(off, r, true, false);
+    }
+    if (neg.length) {
+      ctx.fillStyle = p.lampOff;
+      dots(neg, r, true, false);
+      ctx.fillStyle = this.alpha(p.negCharge, 0.2);
+      if (s >= 4) {
+        const w = Math.max(1, s * 0.05);
+        ctx.lineWidth = w;
+        ctx.strokeStyle = this.alpha(p.negCharge, 0.8);
+        dots(neg, r - w / 2, true, true);
+      } else dots(neg, r, true, false);
+    }
+
+    // Lit LEDs: bloom (added light), then the LED with its hot centre.
+    if (on.length) {
+      if (s >= 5) this.drawBloom(on, s);
+      if (s >= 10) {
+        const { core } = this.lampSprites();
+        for (const it of on) ctx.drawImage(core, it.cx - r, it.cy - r, r * 2, r * 2);
+      } else {
+        ctx.fillStyle = p.lampOn;
+        dots(on, r, true, false);
+      }
+    }
+
+    // A lamp that fires (its charge reached the threshold) flashes a ring.
+    for (const it of items) {
+      if (it.flash <= 0 || s < 5) continue;
+      ctx.beginPath();
+      ctx.arc(it.cx, it.cy, r + s * (this.reduced ? 0.07 : 0.04 + 0.14 * (1 - it.flash)), 0, TAU);
+      ctx.lineWidth = Math.max(1.2, s * 0.05);
+      ctx.strokeStyle = this.alpha(p.lampHot, 0.85 * it.flash);
+      ctx.stroke();
+    }
+    if (s < 14) return;
+    for (const it of items) {
+      if (!it.n.label) continue;
+      const lit = scene.sim.charge(it.n.id) > 0;
+      this.drawLabel(it.n.label, it.cx, it.cy, r * 0.84, lit ? p.lampInk : p.lampLabel);
+    }
+  }
+
+  /**
+   * The lit lamps' bloom, drawn at low resolution into a small canvas
+   * (a smooth glow loses nothing) and laid over the board in one draw.
+   * Redrawn only when the lit lamps or the view change.
+   */
+  private drawBloom(on: readonly NeuronItem[], s: number): void {
+    const g = s * GLOW_RADIUS;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    let hash = on.length;
+    for (const it of on) {
+      if (it.cx - g < x0) x0 = it.cx - g;
+      if (it.cy - g < y0) y0 = it.cy - g;
+      if (it.cx + g > x1) x1 = it.cx + g;
+      if (it.cy + g > y1) y1 = it.cy + g;
+      hash = (Math.imul(hash, 31) + Math.round(it.cx * 4)) | 0;
+      hash = (Math.imul(hash, 31) + Math.round(it.cy * 4)) | 0;
+    }
+    x0 = Math.max(0, Math.floor(x0));
+    y0 = Math.max(0, Math.floor(y0));
+    x1 = Math.min(this.width, Math.ceil(x1));
+    y1 = Math.min(this.height, Math.ceil(y1));
+    if (x1 <= x0 || y1 <= y0) return;
+    // Bloom pixels per CSS pixel: about a dozen per cell is plenty.
+    const q = Math.min(this.dpr, 12 / s, 2048 / (x1 - x0), 2048 / (y1 - y0));
+    const bw = Math.ceil((x1 - x0) * q);
+    const bh = Math.ceil((y1 - y0) * q);
+    const key = `${hash}|${x0}|${y0}|${x1}|${y1}|${q}`;
+    const bloom = (this.bloom ??= { canvas: document.createElement('canvas'), key: '', palette: null });
+    if (bloom.key !== key || bloom.palette !== this.palette) {
+      const c = bloom.canvas;
+      if (c.width < bw || c.height < bh) {
+        c.width = Math.max(c.width, bw);
+        c.height = Math.max(c.height, bh);
+      }
+      const b = c.getContext('2d')!;
+      b.setTransform(1, 0, 0, 1, 0, 0);
+      b.globalCompositeOperation = 'source-over';
+      b.clearRect(0, 0, bw, bh);
+      b.globalCompositeOperation = 'lighter';
+      const { glow } = this.lampSprites();
+      for (const it of on) b.drawImage(glow, (it.cx - g - x0) * q, (it.cy - g - y0) * q, g * 2 * q, g * 2 * q);
+      bloom.key = key;
+      bloom.palette = this.palette;
+    }
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = this.palette.glowBlend;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(bloom.canvas, 0, 0, bw, bh, x0, y0, bw / q, bh / q);
+    ctx.restore();
+  }
+
+  /** The bloom and the lit LED, drawn once per palette and scaled per frame. */
+  private lampSprites(): { glow: HTMLCanvasElement; core: HTMLCanvasElement } {
+    const p = this.palette;
+    if (this.sprites?.palette === p) return this.sprites;
+    const make = (size: number, paint: (ctx: CanvasRenderingContext2D, c: number) => void) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      paint(canvas.getContext('2d')!, size / 2);
+      return canvas;
+    };
+    const a = p.lampGlow;
+    const glow = make(128, (ctx, c) => {
+      // The LED's edge sits at LED_RADIUS / GLOW_RADIUS of the sprite's radius.
+      const g = ctx.createRadialGradient(c, c, 0, c, c, c);
+      g.addColorStop(0, withAlpha(p.lampOn, a));
+      g.addColorStop(0.3, withAlpha(p.lampOn, a * 0.7));
+      g.addColorStop(0.55, withAlpha(p.lampOn, a * 0.22));
+      g.addColorStop(1, withAlpha(p.lampOn, 0));
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, c * 2, c * 2);
+    });
+    const core = make(96, (ctx, c) => {
+      const g = ctx.createRadialGradient(c * 0.86, c * 0.84, 0, c, c, c);
+      g.addColorStop(0, p.lampHot);
+      g.addColorStop(0.42, p.lampOn);
+      g.addColorStop(1, p.lampOn);
+      ctx.beginPath();
+      ctx.arc(c, c, c, 0, TAU);
+      ctx.fillStyle = g;
+      ctx.fill();
+    });
+    this.sprites = { palette: p, glow, core };
+    return this.sprites;
   }
 
   private drawDigit(n: NeuronSpec, cx: number, cy: number, s: number, scene: Scene, flash: number): void {
@@ -451,7 +998,7 @@ export class Renderer {
       const grow = s * 0.08 * (this.reduced ? 1 : flash);
       ctx.beginPath();
       ctx.roundRect(cx - half - grow, cy - half - grow, 2 * (half + grow), 2 * (half + grow), s * 0.2);
-      ctx.fillStyle = withAlpha(p.accent, 0.3 * flash);
+      ctx.fillStyle = this.alpha(p.accent, 0.3 * flash);
       ctx.fill();
     }
     ctx.beginPath();
@@ -459,7 +1006,7 @@ export class Renderer {
     ctx.fillStyle = p.digitTile;
     ctx.fill();
     ctx.lineWidth = Math.max(1, s * 0.03);
-    ctx.strokeStyle = flash > 0 ? withAlpha(p.accent, 0.5 + 0.5 * flash) : withAlpha(color, 0.38);
+    ctx.strokeStyle = flash > 0 ? this.alpha(p.accent, 0.5 + 0.5 * flash) : this.alpha(color, 0.38);
     ctx.stroke();
     if (s < 6) return;
 
@@ -473,7 +1020,7 @@ export class Renderer {
 
     if (n.label && s >= 16) {
       ctx.font = `500 ${Math.max(9, s * 0.24)}px ${UI_FONT}`;
-      ctx.fillStyle = withAlpha(p.ink, 0.6);
+      ctx.fillStyle = this.alpha(p.ink, 0.6);
       ctx.textBaseline = 'top';
       ctx.fillText(n.label, cx, cy + half + s * 0.06);
     }
@@ -498,17 +1045,17 @@ export class Renderer {
     if (flash > 0) {
       ctx.beginPath();
       ctx.arc(cx, cy, ringR + s * (this.reduced ? 0.08 : 0.06 + 0.16 * (1 - flash)), 0, TAU);
-      ctx.fillStyle = withAlpha(color, 0.28 * flash);
+      ctx.fillStyle = this.alpha(color, 0.28 * flash);
       ctx.fill();
     }
 
     // Core.
     ctx.beginPath();
     ctx.arc(cx, cy, core, 0, TAU);
-    ctx.fillStyle = withAlpha(color, dim ? 0.08 : 0.2 + 0.8 * flash);
+    ctx.fillStyle = this.alpha(color, dim ? 0.08 : 0.2 + 0.8 * flash);
     ctx.fill();
     ctx.lineWidth = Math.max(1, s * 0.035);
-    ctx.strokeStyle = dim ? withAlpha(color, 0.45) : color;
+    ctx.strokeStyle = dim ? this.alpha(color, 0.45) : color;
     ctx.stroke();
     if (s < 6) return;
 
@@ -519,6 +1066,16 @@ export class Renderer {
       else this.drawChargeRing(cx, cy, ringR, ringW, color, charge, n.threshold);
     }
     if (s < 14) return;
+    this.drawRoundDetails(n, cx, cy, s, scene, flash, charge, dim, timerFrac);
+  }
+
+  /** What a round neuron shows from 14 px per cell: a negative badge, its label or glyph, a caption. */
+  private drawRoundDetails(n: NeuronSpec, cx: number, cy: number, s: number, scene: Scene, flash: number, charge: number, dim: boolean, timerFrac: number): void {
+    const { ctx, palette: p } = this;
+    const color = p.kinds[n.kind];
+    const core = s * 0.3;
+    const ringR = s * 0.395;
+    const ringW = Math.max(1.4, s * 0.06);
     if (charge < 0 && n.kind !== 'timer' && s >= 16) this.drawNegativeBadge(charge, cx + ringR * 0.8, cy - ringR * 0.8, s);
 
     const ink = flash > 0.45 ? p.inkOnKind : color;
@@ -550,11 +1107,11 @@ export class Renderer {
       ctx.lineTo(cx + Math.cos(angle) * core * 0.62, cy + Math.sin(angle) * core * 0.62);
       ctx.lineWidth = Math.max(1.2, s * 0.045);
       ctx.lineCap = 'round';
-      ctx.strokeStyle = dim ? withAlpha(color, 0.5) : ink;
+      ctx.strokeStyle = dim ? this.alpha(color, 0.5) : ink;
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(cx, cy, Math.max(1, s * 0.03), 0, TAU);
-      ctx.fillStyle = dim ? withAlpha(color, 0.5) : ink;
+      ctx.fillStyle = dim ? this.alpha(color, 0.5) : ink;
       ctx.fill();
     } else if (n.kind === 'note') {
       const name = noteName(n.note ?? 60);
@@ -573,12 +1130,13 @@ export class Renderer {
     if (s >= 48 || (s >= 20 && focused)) {
       let caption = '';
       if (n.kind === 'note' && n.label) caption = noteName(n.note ?? 60);
+      const state = n.kind === 'timer' ? scene.sim.state(n.id) : undefined;
       if (n.kind === 'timer' && (n.times ?? -1) >= 0 && state) caption = dim ? 'done' : `×${(n.times ?? 0) - state.timerFires}`;
       if (caption) {
         ctx.font = `600 ${Math.max(9, s * 0.2)}px ${UI_FONT}`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        ctx.fillStyle = withAlpha(color, 0.85);
+        ctx.fillStyle = this.alpha(color, 0.85);
         ctx.fillText(caption, cx, cy + ringR + ringW);
       }
     }
@@ -626,45 +1184,120 @@ export class Renderer {
    * Segmented ring: one segment per unit of threshold, filled clockwise
    * as charge builds up; negative charge fills anticlockwise in red.
    */
+  /**
+   * Segmented ring: one segment per unit of threshold, filled clockwise as
+   * charge builds up; negative charge fills anticlockwise in red.
+   */
   private drawChargeRing(cx: number, cy: number, r: number, w: number, color: string, charge: number, threshold: number): void {
     const { ctx, palette: p } = this;
-    const top = -Math.PI / 2;
     ctx.lineWidth = w;
     ctx.lineCap = 'butt';
-    const segmented = threshold > 1 && threshold <= 24 && r * TAU / threshold > w * 1.6;
+    ctx.strokeStyle = this.alpha(color, isSegmented(threshold, r, w) ? 0.18 : 0.16);
+    this.ringTrack(cx, cy, r, w, threshold);
+    if (charge === 0) return;
+    ctx.strokeStyle = charge < 0 ? p.negCharge : color;
+    this.ringCharge(cx, cy, r, w, charge, threshold);
+  }
+
+  /** Stroke a ring's track (in the current style): a plain circle, or one arc per unit of threshold. */
+  private ringTrack(cx: number, cy: number, r: number, w: number, threshold: number): void {
+    const { ctx } = this;
+    ctx.beginPath();
+    if (!isSegmented(threshold, r, w)) ctx.arc(cx, cy, r, 0, TAU);
+    else this.ringSegments(cx, cy, r, threshold, 0, threshold);
+    ctx.stroke();
+  }
+
+  /** Stroke the charged part of a ring (in the current style), over its track. */
+  private ringCharge(cx: number, cy: number, r: number, w: number, charge: number, threshold: number): void {
+    const { ctx } = this;
     const filled = Math.min(threshold, Math.abs(charge));
-    const sign = charge < 0 ? -1 : 1;
-    if (!segmented) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, TAU);
-      ctx.strokeStyle = withAlpha(color, 0.16);
-      ctx.stroke();
-      if (filled > 0) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, top, top + (sign * TAU * filled) / threshold, sign < 0);
-        ctx.strokeStyle = sign < 0 ? p.negCharge : color;
-        ctx.stroke();
-      }
-      return;
-    }
+    const top = -Math.PI / 2;
+    ctx.beginPath();
+    if (!isSegmented(threshold, r, w)) {
+      const sweep = (TAU * filled) / threshold;
+      ctx.arc(cx, cy, r, top, charge < 0 ? top - sweep : top + sweep, charge < 0);
+    } else if (charge > 0) this.ringSegments(cx, cy, r, threshold, 0, filled);
+    else this.ringSegments(cx, cy, r, threshold, threshold - filled, threshold);
+    ctx.stroke();
+  }
+
+  /** Add ring segments [from, to) to the current path, clockwise from the top. */
+  private ringSegments(cx: number, cy: number, r: number, threshold: number, from: number, to: number): void {
+    const { ctx } = this;
     const step = TAU / threshold;
     const gap = Math.min(0.22, step * 0.28);
-    const track = new Path2D();
-    const fill = new Path2D();
-    for (let i = 0; i < threshold; i++) {
-      // Positive charge fills segments clockwise from the top, negative anticlockwise.
-      const index = sign > 0 ? i : threshold - 1 - i;
-      const a0 = top + index * step + gap / 2;
-      const a1 = a0 + step - gap;
-      const target = i < filled ? fill : track;
-      target.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r);
-      target.arc(cx, cy, r, a0, a1);
+    for (let i = from; i < to; i++) {
+      const a0 = -Math.PI / 2 + i * step + gap / 2;
+      ctx.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r);
+      ctx.arc(cx, cy, r, a0, a0 + step - gap);
     }
-    ctx.strokeStyle = withAlpha(color, 0.18);
-    ctx.stroke(track);
-    if (filled > 0) {
-      ctx.strokeStyle = sign < 0 ? p.negCharge : color;
-      ctx.stroke(fill);
+  }
+
+  /**
+   * Round neurons (not timers), a kind at a time, with one style per pass:
+   * cores, ring tracks, charge, then the per-neuron details (labels,
+   * glyphs) when zoomed in enough to show them. `part` picks what to draw:
+   * everything, only what holds still while the network runs (for the
+   * neuron layer, see drawRoundNeurons), or only the charge on the rings.
+   * Every ring is its own draw call: a canvas draws a lone circle or arc far
+   * faster than one path holding many.
+   */
+  private drawRoundBatch(batch: ReadonlyMap<NeuronKind, RoundBatch>, s: number, scene: Scene, part: 'all' | 'static' | 'charge'): void {
+    const { ctx, palette: p } = this;
+    const core = s * 0.3;
+    const ringR = s * 0.395;
+    const ringW = Math.max(1.4, s * 0.06);
+    const outline = Math.max(1, s * 0.035);
+    const statics = part !== 'charge';
+    for (const [kind, { ns, xy }] of batch) {
+      if (!ns.length) continue;
+      const color = p.kinds[kind];
+      if (statics) {
+        ctx.lineWidth = outline;
+        ctx.fillStyle = this.alpha(color, 0.2);
+        ctx.strokeStyle = color;
+        // Many outlines in one path are cheap only as hairlines (one device pixel).
+        const step = outline * this.dpr <= 1 ? 800 : 2;
+        for (let start = 0; start < xy.length; start += step) {
+          ctx.beginPath();
+          const end = Math.min(xy.length, start + step);
+          for (let i = start; i < end; i += 2) {
+            ctx.moveTo(xy[i]! + core, xy[i + 1]!);
+            ctx.arc(xy[i]!, xy[i + 1]!, core, 0, TAU);
+          }
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      if (s < 10) continue;
+      ctx.lineWidth = ringW;
+      ctx.lineCap = 'butt';
+      if (statics) {
+        for (const segmented of [false, true]) {
+          ctx.strokeStyle = this.alpha(color, segmented ? 0.18 : 0.16);
+          for (let i = 0; i < ns.length; i++) {
+            if (isSegmented(ns[i]!.threshold, ringR, ringW) === segmented) this.ringTrack(xy[2 * i]!, xy[2 * i + 1]!, ringR, ringW, ns[i]!.threshold);
+          }
+        }
+      }
+      if (part === 'static') continue;
+      for (const negative of [false, true]) {
+        ctx.strokeStyle = negative ? p.negCharge : color;
+        for (let i = 0; i < ns.length; i++) {
+          const charge = scene.sim.charge(ns[i]!.id);
+          if (charge !== 0 && charge < 0 === negative) this.ringCharge(xy[2 * i]!, xy[2 * i + 1]!, ringR, ringW, charge, ns[i]!.threshold);
+        }
+      }
+    }
+    if (s < 14) return;
+    for (const { ns, xy } of batch.values()) {
+      for (let i = 0; i < ns.length; i++) {
+        const n = ns[i]!;
+        const charge = part === 'static' ? 0 : scene.sim.charge(n.id);
+        if (statics) this.drawRoundDetails(n, xy[2 * i]!, xy[2 * i + 1]!, s, scene, 0, charge, false, 0);
+        else if (charge < 0 && s >= 16) this.drawNegativeBadge(charge, xy[2 * i]! + ringR * 0.8, xy[2 * i + 1]! - ringR * 0.8, s);
+      }
     }
   }
 
@@ -675,7 +1308,7 @@ export class Renderer {
     ctx.lineCap = 'butt';
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, TAU);
-    ctx.strokeStyle = withAlpha(color, dim ? 0.1 : 0.18);
+    ctx.strokeStyle = this.alpha(color, dim ? 0.1 : 0.18);
     ctx.stroke();
     if (frac > 0) {
       ctx.beginPath();
@@ -719,11 +1352,11 @@ export class Renderer {
     // Hover.
     if (hover?.type === 'neuron' && !selection.neurons.has(hover.id)) {
       const n = scene.index.byId.get(hover.id);
-      if (n) ring(n, withAlpha(p.accent, 0.45), 1.25);
+      if (n) ring(n, this.alpha(p.accent, 0.45), 1.25);
     }
     if (hover?.type === 'text' && !selection.texts.has(hover.id)) {
       const t = scene.index.texts.get(hover.id);
-      if (t) this.textOutline(t, cam, withAlpha(p.accent, 0.4), false);
+      if (t) this.textOutline(t, cam, this.alpha(p.accent, 0.4), false);
     }
     if (hover?.type === 'cell' && scene.tool === 'place' && !preview) this.ghost(scene, hover.x, hover.y);
 
@@ -801,10 +1434,10 @@ export class Renderer {
     if (preview?.type === 'marquee') {
       const a = cam.toScreen(Math.min(preview.x0, preview.x1), Math.min(preview.y0, preview.y1));
       const b = cam.toScreen(Math.max(preview.x0, preview.x1), Math.max(preview.y0, preview.y1));
-      ctx.fillStyle = withAlpha(p.accent, 0.08);
+      ctx.fillStyle = this.alpha(p.accent, 0.08);
       ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = withAlpha(p.accent, 0.8);
+      ctx.strokeStyle = this.alpha(p.accent, 0.8);
       ctx.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x, b.y - a.y);
     }
 
@@ -823,7 +1456,7 @@ export class Renderer {
         ctx.arc(c.x, c.y, s * 0.55, 0, TAU);
         ctx.lineWidth = 1.5;
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = withAlpha(p.ink, 0.45 * (1 - t));
+        ctx.strokeStyle = this.alpha(p.ink, 0.45 * (1 - t));
         ctx.stroke();
         ctx.setLineDash([]);
         continue;
@@ -833,12 +1466,12 @@ export class Renderer {
       ctx.beginPath();
       ctx.arc(c.x, c.y, s * (0.5 + 0.45 * grow), 0, TAU);
       ctx.lineWidth = 2 * (1 - t) + 0.5;
-      ctx.strokeStyle = withAlpha(p.accent, 0.8 * (1 - t));
+      ctx.strokeStyle = this.alpha(p.accent, 0.8 * (1 - t));
       ctx.stroke();
       ctx.font = `700 ${Math.max(11, s * 0.3)}px ${UI_FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
-      ctx.fillStyle = withAlpha(p.accent, 1 - t * t);
+      ctx.fillStyle = this.alpha(p.accent, 1 - t * t);
       ctx.fillText(r.charge > 0 ? `+${r.charge}` : `${r.charge}`, c.x, c.y - s * (0.5 + 0.35 * grow));
     }
   }
@@ -856,10 +1489,10 @@ export class Renderer {
       const c = cam.toScreen(n.x + 0.5, n.y + 0.5);
       ctx.beginPath();
       ctx.arc(c.x, c.y, r, 0, TAU);
-      ctx.fillStyle = withAlpha(p.ink, 0.22 * alpha);
+      ctx.fillStyle = this.alpha(p.ink, 0.22 * alpha);
       ctx.fill();
       ctx.lineWidth = Math.max(1.5, s * 0.05);
-      ctx.strokeStyle = withAlpha(p.ink, 0.7 * alpha);
+      ctx.strokeStyle = this.alpha(p.ink, 0.7 * alpha);
       ctx.stroke();
       return c;
     };
@@ -879,14 +1512,14 @@ export class Renderer {
       ctx.beginPath();
       ctx.arc(c.x, c.y, s * (0.5 + 0.55 * t), 0, TAU);
       ctx.lineWidth = Math.max(1, 2.5 * (1 - t));
-      ctx.strokeStyle = withAlpha(p.ink, 0.55 * (1 - t));
+      ctx.strokeStyle = this.alpha(p.ink, 0.55 * (1 - t));
       ctx.stroke();
     }
   }
 
   /**
    * The keyboard's cell cursor: corner brackets around a cell, with a faint
-   * preview of the kind that 1-6 / Enter would place when the cell is free.
+   * preview of the kind that a number key / Enter would place when the cell is free.
    */
   private drawKeyCursor(scene: Scene, x: number, y: number): void {
     const { ctx, palette: p } = this;
@@ -941,7 +1574,7 @@ export class Renderer {
     ctx.restore();
     ctx.setLineDash([4, 4]);
     ctx.lineWidth = 1;
-    ctx.strokeStyle = withAlpha(p.accent, 0.6);
+    ctx.strokeStyle = this.alpha(p.accent, 0.6);
     const tl = cam.toScreen(x, y);
     ctx.strokeRect(tl.x + 1.5, tl.y + 1.5, s - 3, s - 3);
     ctx.setLineDash([]);
@@ -996,19 +1629,43 @@ export class Renderer {
 
 /** Paths for every connection, optionally with some neurons shifted (move preview). */
 function buildPaths(network: Network, index: NetIndex, move: Extract<Preview, { type: 'move' }> | null): PathSet {
-  const byKey = new Map<string, ConnectionPath>();
-  const byFrom = new Map<string, Map<string, ConnectionPath>>();
+  const byKey = new Map<string, Wire>();
+  const byFrom = new Map<string, Map<string, Wire>>();
+  const wires: Wire[] = [];
   const at = (n: NeuronSpec) => (move && move.neurons.has(n.id) ? { x: n.x + move.dx, y: n.y + move.dy, kind: n.kind } : n);
   for (const c of network.connections) {
     const from = index.byId.get(c.from);
     const to = index.byId.get(c.to);
-    if (!from || !to) continue;
-    const path = connectionPath(at(from), at(to), index.pairs.has(pairKey(c.to, c.from)));
-    byKey.set(pairKey(c.from, c.to), path);
-    if (!byFrom.has(c.from)) byFrom.set(c.from, new Map());
-    byFrom.get(c.from)!.set(c.to, path);
+    const key = pairKey(c.from, c.to);
+    if (!from || !to || byKey.has(key)) continue;
+    const twoWay = index.pairs.has(pairKey(c.to, c.from));
+    const path = connectionPath(at(from), at(to), twoWay);
+    const tip = endTangent(path);
+    const wire: Wire = {
+      ...path,
+      from: c.from,
+      to: c.to,
+      toLamp: to.kind === 'lamp',
+      straight: !twoWay,
+      minX: Math.min(path.x0, path.cx, path.x1),
+      minY: Math.min(path.y0, path.cy, path.y1),
+      maxX: Math.max(path.x0, path.cx, path.x1),
+      maxY: Math.max(path.y0, path.cy, path.y1),
+      dx: tip.x,
+      dy: tip.y,
+      len: pathLength(path),
+    };
+    wires.push(wire);
+    byKey.set(key, wire);
+    let targets = byFrom.get(c.from);
+    if (!targets) byFrom.set(c.from, (targets = new Map()));
+    targets.set(c.to, wire);
   }
-  return { byKey, byFrom };
+  const lampSpecs = network.neurons.filter((n) => n.kind === 'lamp');
+  const cells = lampSpecs.map(at);
+  const corners = lampCorners(cells);
+  const lamps = lampSpecs.map((n, i) => ({ n, x: cells[i]!.x, y: cells[i]!.y, corners: corners[i]! }));
+  return { byKey, byFrom, wires, lamps };
 }
 
 /** Draw one neuron kind as an icon (tool rail, legend, inspector). */
@@ -1038,6 +1695,32 @@ export function drawKindIcon(canvas: HTMLCanvasElement, kind: NeuronKind, palett
     ctx.textBaseline = 'middle';
     ctx.fillStyle = palette.digitInk;
     ctx.fillText('7', c, c + s * 0.03);
+    return;
+  }
+  if (kind === 'lamp') {
+    // A tiny dot-matrix screen with a lit snake on it.
+    const h = s * 0.44;
+    ctx.beginPath();
+    ctx.roundRect(c - h, c - h, h * 2, h * 2, s * 0.14);
+    ctx.fillStyle = palette.lampScreen;
+    ctx.fill();
+    const lit = [1, 1, 0, 0, 1, 0, 0, 1, 1];
+    const pitch = (h * 2) / 3;
+    const r = pitch * 0.36;
+    for (let i = 0; i < 9; i++) {
+      const x = c - h + pitch * ((i % 3) + 0.5);
+      const y = c - h + pitch * (Math.floor(i / 3) + 0.5);
+      if (lit[i]) {
+        ctx.beginPath();
+        ctx.arc(x, y, r * 1.7, 0, TAU);
+        ctx.fillStyle = withAlpha(palette.lampOn, 0.22);
+        ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fillStyle = lit[i] ? palette.lampOn : palette.lampOff;
+      ctx.fill();
+    }
     return;
   }
   const core = s * 0.29;

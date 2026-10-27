@@ -63,6 +63,8 @@ export function readAutosave(storage: Storage | undefined = safeStorage()): Auto
 
 /** Same neurons, connections and texts, regardless of key order. */
 export function sameNetwork(a: Network, b: Network): boolean {
+  // An example opened and not edited is the very same object (big networks skip the comparison).
+  if (a === b) return true;
   try {
     return JSON.stringify(normalizeNetwork(a)) === JSON.stringify(normalizeNetwork(b));
   } catch {
