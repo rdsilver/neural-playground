@@ -158,3 +158,137 @@ describe('move queue', () => {
     expect(run(unit, frames, { lead: unit.q.powerLead - 1, shiftFirst: true })).toBeDefined();
   });
 });
+
+describe('queue timing', () => {
+  /**
+   * The frame schedule (depth 4, 4 lanes), in ticks after a shift fire; the
+   * same table is in snake-queue.ts.
+   *
+   *   event                                          ticks
+   *   shift fires (P); M fires                       0; 15
+   *   pair +1 / -1 lands on stage cells              34-77 / 37-77    holders fire on the +1
+   *   tokens handed down land                        58-92
+   *   last stages fire = outputs (if holding)        34               outLag
+   *   input fires, for an exact depth*F delay        34               inAt
+   *   input +1 lands on stage 0                      79 (inner), 94 (outer lanes)
+   *   ANY fires (if an output fired)                 83               outLag + anyLag
+   *   settled moment: all at rest (restFor)          94               settle
+   *   input offsets that still queue for depth       32 .. F+8        tolerance
+   *   smallest frame period                          61               minF
+   *   power must precede the first shift by          1                powerLead
+   */
+  it('matches the documented schedule', () => {
+    for (const F of F_VALUES) {
+      const { q } = makeQueue(F);
+      const { inAt, outLag, anyLag, settle, minF: m, powerLead, delay, tolerance, inWindow } = q;
+      expect({ inAt, outLag, anyLag, settle, minF: m, powerLead, delay, tolerance, inWindow }).toEqual({
+        inAt: 34, outLag: 34, anyLag: 49, settle: 94, minF: 61, powerLead: 1, delay: 4 * F, tolerance: { min: 32, max: F + 8 }, inWindow: { min: 34, max: 34 },
+      });
+    }
+  });
+
+  it('every event happens at its documented tick', () => {
+    const F = 240;
+    const unit = makeQueue(F);
+    const { q, net } = unit;
+    const sim = new Simulation(net);
+    const s0 = 2;
+    sim.schedule(1, q.power);
+    const frames = randomFrames(11, 200);
+    frames.forEach((f, k) => {
+      sim.schedule(s0 + k * F, q.shift);
+      if (f.lane !== null) sim.schedule(s0 + k * F + q.inAt, q.inputs[f.lane]!);
+    });
+    const stages = q.stages.flat();
+    const fires = new Map<string, Set<number>>();
+    // A token (or input) landing is a rise from -1 to 0 after the stage's pair -1.
+    const pm = new Map(stages.map((id) => [id, travel(net, q.shift, 'q-minus') + travel(net, 'q-minus', id)] as const));
+    const landings = { stage: new Set<number>(), input: new Set<string>(), any: new Set<number>() };
+    let last = new Map(stages.map((id) => [id, sim.charge(id)] as const));
+    while (sim.tick < s0 + frames.length * F) {
+      for (const e of sim.step()) {
+        const role = e.neuron === q.any ? 'any' : q.outputs.includes(e.neuron) ? 'output' : stages.includes(e.neuron) ? 'stage' : e.neuron;
+        if (!fires.has(role)) fires.set(role, new Set());
+        fires.get(role)!.add((e.tick - s0) % F);
+      }
+      const o = (sim.tick - s0) % F;
+      for (const id of sim.tick < s0 + F ? [] : stages) { // skip power-on
+        const c = sim.charge(id);
+        if (c !== last.get(id)) landings.any.add(o);
+        if (last.get(id) === -1 && c === 0 && o > pm.get(id)!) {
+          const lane = q.stages.findIndex((ln) => ln[0] === id);
+          if (lane < 0) landings.stage.add(o);
+          else landings.input.add(`${lane}@${o}`);
+        }
+      }
+      last = new Map(stages.map((id) => [id, sim.charge(id)] as const));
+    }
+    const range = (xs: Set<number> | undefined) => [Math.min(...xs!), Math.max(...xs!)];
+    expect(range(fires.get('q-shift'))).toEqual([0, 0]);
+    expect(range(fires.get('q-minus'))).toEqual([15, 15]);
+    expect(range(fires.get('stage'))).toEqual([43, 77]); // holders other than the last stages
+    expect(range(fires.get('output'))).toEqual([34, 34]);
+    expect(range(fires.get('any'))).toEqual([83, 83]);
+    expect(range(landings.any)).toEqual([34, q.settle]); // every stage charge change of a frame
+    expect(range(landings.stage)).toEqual([58, 92]);
+    expect([...landings.input].sort()).toEqual(['0@94', '1@79', '2@79', '3@94']);
+  });
+});
+
+describe('queue mutation test', () => {
+  /**
+   * Equivalent mutants, not counted as survivors (one line each):
+   * - threshold 1 -> 0, on every neuron: the engine fires at charge >= max(1, threshold), so 0 behaves exactly as 1.
+   * The test still runs them and checks that they really are equivalent.
+   */
+  const isEquivalent = (threshold: number) => threshold < 1;
+
+  it('every single missing connection, and every threshold +1 / -1, breaks an invariant', () => {
+    const t0 = Date.now();
+    const unit = makeQueue(minF);
+    const { net } = unit;
+    // Every lane, back to back and apart, plus a seeded random tail with empty frames.
+    const frames: Frame[] = [0, 1, 2, 3, null, 3, 2, 1, 0].map((lane) => ({ lane })).concat(randomFrames(9, 8));
+    expect(run(unit, frames)).toBeUndefined();
+    const survivors: string[] = [];
+    let killed = 0;
+    let equivalent = 0;
+    net.connections.forEach((c, i) => {
+      const mutant = { ...net, connections: net.connections.filter((_, j) => j !== i) };
+      if (run(unit, frames, { net: mutant }) === undefined) survivors.push(`no ${c.from} -> ${c.to}`);
+      else killed++;
+    });
+    net.neurons.forEach((n, i) => {
+      for (const delta of [1, -1]) {
+        const threshold = n.threshold + delta;
+        const mutant = { ...net, neurons: net.neurons.map((m, j) => (j === i ? { ...m, threshold } : m)) };
+        const broken = run(unit, frames, { net: mutant }) !== undefined;
+        if (isEquivalent(threshold)) {
+          expect(broken, `${n.id} threshold ${threshold} should be equivalent`).toBe(false);
+          equivalent++;
+        } else if (broken) killed++;
+        else survivors.push(`${n.id} threshold ${threshold}`);
+      }
+    });
+    expect(survivors).toEqual([]);
+    expect(killed).toBe(net.connections.length + net.neurons.length);
+    expect(equivalent).toBe(net.neurons.length);
+    expect(Date.now() - t0).toBeLessThan(20_000);
+  });
+});
+
+describe('queue layout', () => {
+  it('is the documented grid: lane columns, last stages on a circle around SHIFT, A relays on one around ANY', () => {
+    const { q, net } = makeQueue(480);
+    const cell = (id: string) => net.neurons.find((n) => n.id === id)!;
+    const rel = (id: string) => ({ x: cell(id).x - cell(q.shift).x, y: cell(id).y - cell(q.shift).y });
+    expect(q.stages.map((lane) => lane.map(rel))).toEqual(
+      [-2, -1, 1, 2].map((x) => [3, 2, 1, 0].map((k) => ({ x, y: (Math.abs(x) === 1 ? -2 : -1) - k }))),
+    );
+    expect(q.inputs.map(rel)).toEqual([-2, -1, 1, 2].map((x) => ({ x, y: -8 })));
+    expect([q.any, 'q-minus', q.power].map(rel)).toEqual([{ x: 0, y: 1 }, { x: 0, y: -1 }, { x: 0, y: -2 }]);
+    for (const out of q.outputs) expect(travel(net, q.shift, out)).toBe(q.outLag);
+    q.outputs.forEach((out, l) => expect(travel(net, out, `q-a${l}`) + travel(net, `q-a${l}`, q.any)).toBe(q.anyLag));
+    expect([net.neurons.length, net.connections.length]).toEqual([28, 73]);
+  });
+});

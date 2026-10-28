@@ -40,27 +40,31 @@ import { at, type Cell, type Place } from './snake-control';
  *     x: -2  -1   0   1   2
  *   y=-8  I0  I1      I2  I3     inputs (one row)
  *   y=-5      S       S          lane columns, stage 0 at the top;
- *   y=-4  S   S   ON  S   S      inner lanes one row higher than outer ones
- *   y=-3  S   S       S   S      (ON: the power-on Inhibitor)
- *   y=-2  S   S       S   S
+ *   y=-4  S   S       S   S      inner lanes one row higher than outer ones
+ *   y=-3  S   S       S   S
+ *   y=-2  S   S   ON  S   S      ON: the power-on Inhibitor (holes)
  *   y=-1  S   A1  M   A2  S      M: the pair's shared -1 source
  *   y= 0  A0      P       A3     P: shift (the pair's +1 source)
  *   y= 1          ANY
  *
- * Frame schedule, ticks after a shift fire (depth 4, 4 lanes). Asserted in
- * snake-queue.test.ts.
+ * Frame schedule, ticks after a shift fire (depth 4, 4 lanes); every row is
+ * F-independent and asserted in snake-queue.test.ts.
  *
  *   event                                          ticks
  *   shift fires (P); M fires                       0; 15
  *   pair +1 / -1 lands on stage cells              34-77 / 37-77    holders fire on the +1
  *   last stages fire = outputs (if holding)        34               outLag
- *   input fires, for an exact depth*F delay        34               inAt
- *   input +1 lands on stage 0                      94
- *   ANY fires (if an output fired)                 83               outLag + anyLag
+ *   tokens handed down land                        58-92
+ *   input fires, for an exact depth*F delay        34               inAt (= inWindow)
+ *   input +1 lands on stage 0                      79 inner, 94 outer lanes
+ *   ANY fires (if an output fired)                 83               outLag + anyLag (49)
  *   settled moment: all at rest (restFor)          94               settle
- *   input offsets that still queue for depth       32..F+33         tolerance
+ *   input offsets that still queue for depth       32 .. F+8        tolerance
  *   smallest frame period                          61               minF
- *   power must precede the first shift by          >= 0             powerLead
+ *   power fires before the first shift by >=       1                powerLead
+ *
+ * With F >= minF the frames do not overlap on any cell: a frame's last
+ * arrival (settle) comes before the next frame's first pair (F + 34).
  */
 
 export interface QueueOptions {
@@ -109,8 +113,8 @@ export interface Queue {
   outLag: number;
   /**
    * Input offsets (after shift) that still hold the move exactly `depth`
-   * frames: output at shift + outLag, delay = depth*F + inAt - offset. Inputs
-   * after inAt land later than `settle` (the settled moment moves with them).
+   * frames: output at shift + outLag, delay = depth*F + inAt - offset. An
+   * input later than inAt may land after `settle` (the settled moment moves).
    */
   tolerance: { min: number; max: number };
   /** Stage cells per lane, stage 0 first (for tests and probes). */
