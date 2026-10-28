@@ -193,11 +193,13 @@ function queueTiming(lanes: number, depth: number, cells: Map<string, Cell>): Qu
       } else {
         const a0 = t(`in${l}`, s(l, 0));
         token = [outLag + a0, outLag];
-        // Input offsets w: land after the pair -1, before the next pair +1 (F = minF here).
+        // Input offsets w that work: the input lands after this frame's pair
+        // -1 and no later than the next frame's pair +1 (tick F + p; on that
+        // tie either order fires stage 0 on the beat).
         let w = m[0] - a0;
         while (!after([w + a0, w], m)) w++;
         tolMin = Math.max(tolMin, w);
-        tolMax = Math.min(tolMax, p[0] - a0); // + F: land by the next pair's +1 (on a tie, either order fires S0 on that tick)
+        tolMax = Math.min(tolMax, p[0] - a0); // + F
         if (!after(token, m)) return undefined;
       }
       settle = Math.max(settle, m[0], token[0]);
