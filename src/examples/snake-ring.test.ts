@@ -22,11 +22,13 @@ interface Scenario {
   start: number;
   /** Ticks from power to t_0 (default F). */
   lead?: number;
+  /** Read offset of frame k (default readLag); the settled-moment probe needs the default. */
+  read?: (k: number) => number;
 }
 
 /**
  * Run a ring through a scenario: power at tick 1, frame k's move at
- * t_k = 1 + lead + kF, its read at t_k + readLag. Checks, against the model
+ * t_k = 1 + lead + kF, its read at t_k + readLag (or read(k)). Checks, against the model
  * (position mod n), that every frame exactly one line fires, the right one,
  * at the exact tick, that every neuron of the block is at its rest charge at
  * t_k + settle, and that afterwards the block goes idle at rest. Returns the
@@ -39,9 +41,10 @@ function run(unit: Unit, sc: Scenario, fireLog?: string[]): { error?: string; ma
   const sim = new Simulation(net);
   sim.schedule(1, ring.power);
   const t = (k: number) => 1 + (sc.lead ?? F) + k * F;
+  const r = moves.map((_, k) => sc.read?.(k) ?? ring.readLag);
   moves.forEach((m, k) => {
     if (m !== 'hold') sim.schedule(t(k), ring[m]);
-    sim.schedule(t(k) + ring.readLag, ring.read);
+    sim.schedule(t(k) + r[k]!, ring.read);
   });
   const lineOf = new Map(ring.lines.map((id, j) => [id, j] as const));
   const expected: Array<{ j: number; tick: number }> = [];
@@ -49,16 +52,17 @@ function run(unit: Unit, sc: Scenario, fireLog?: string[]): { error?: string; ma
   let pos = start;
   moves.forEach((m, k) => {
     pos = (pos + (m === 'fwd' ? 1 : m === 'back' ? n - 1 : 0)) % n;
-    expected.push({ j: pos, tick: t(k) + ring.readLag + ring.lineDelay[pos]! });
-    settleAt.set(t(k) + ring.settle, pos);
+    expected.push({ j: pos, tick: t(k) + r[k]! + ring.lineDelay[pos]! });
+    if (!sc.read) settleAt.set(t(k) + ring.settle, pos);
   });
+  expected.sort((a, b) => a.tick - b.tick);
   const ids = Object.keys(ring.restFor(0));
   const atRest = (p: number) => {
     const rest = ring.restFor(p);
     const bad = ids.find((id) => sim.charge(id) !== rest[id]);
     return bad && `${bad} holds ${sim.charge(bad)}, not ${rest[bad]}, at tick ${sim.tick} (pos ${p})`;
   };
-  const end = expected[expected.length - 1]!.tick;
+  const end = Math.max(...expected.map((e) => e.tick), ...settleAt.keys());
   let next = 0;
   let maxPulses = 0;
   while (sim.tick < end) {
@@ -138,7 +142,7 @@ describe('ring counter', () => {
       for (const fastLines of MODES) {
         const units = Array.from({ length: n }, (_, s) => makeRing(n, 200, s, { fastLines }));
         const { minF } = units[0]!.ring;
-        expect(minF).toBe(n === 8 ? 83 : 81);
+        expect(minF).toBe(n === 8 ? 82 : 78);
         for (let F = minF; F <= 200; F++) drive(n, F, randomMoves(F, 40), F % n, units[F % n]);
         drive(n, minF, randomMoves(7, 500), 0, makeRing(n, minF, 0, { fastLines }));
         expect(() => makeRing(n, minF - 1, 0, { fastLines })).toThrow(/below/);
@@ -155,24 +159,36 @@ describe('ring timing', () => {
    *   token / stale clears land               ..141    ..152
    *   settled moment (all at rest)             141      152     = settle
    *   read fires                                82       78     = readLag
+   *   read may fire instead at r in            66..F+4  62..F+4  = [readEarliest, readLatest]
+   *   fastLines, read at readEarliest         141-145  152-158
    *   read +1 lands on every R_j (holder fires)142-146  153-159
    *   holder's restore lands                  172-176  183-189
    *   line j fires                             343      385     = readLag + lineDelay (or lineAt)
    *   line j fires, fastLines                 157-161  168-174  = readLag + lineDelay[j]
-   *   minimum frame period                      83       81     = minF
+   *   minimum frame period                      82       78     = minF
    *   power lead before t_0                     21       22     = powerLead
    */
   it('matches the documented schedule', () => {
     const row = (n: number, fastLines: boolean) => {
       const { ring } = makeRing(n, 90, 0, { fastLines });
       const line = ring.lineDelay.map((d) => ring.readLag + d);
-      return { readLag: ring.readLag, settle: ring.settle, line: [Math.min(...line), Math.max(...line)], minF: ring.minF, powerLead: ring.powerLead };
+      const window = [ring.readEarliest, ring.readLatest - 90];
+      return { readLag: ring.readLag, window, settle: ring.settle, line: [Math.min(...line), Math.max(...line)], minF: ring.minF, powerLead: ring.powerLead };
     };
-    const core = { 8: { readLag: 82, settle: 141, minF: 83, powerLead: 21 }, 10: { readLag: 78, settle: 152, minF: 81, powerLead: 22 } };
+    const core = {
+      8: { readLag: 82, window: [66, 4], settle: 141, minF: 82, powerLead: 21 },
+      10: { readLag: 78, window: [62, 4], settle: 152, minF: 78, powerLead: 22 },
+    };
     expect(row(8, false)).toEqual({ ...core[8], line: [343, 343] });
     expect(row(10, false)).toEqual({ ...core[10], line: [385, 385] });
     expect(row(8, true)).toEqual({ ...core[8], line: [157, 161] });
     expect(row(10, true)).toEqual({ ...core[10], line: [168, 174] });
+    // Fastest: fastLines with the read at readEarliest.
+    const fastest = (n: number) => {
+      const { ring } = makeRing(n, 90, 0, { fastLines: true });
+      return [ring.readEarliest + Math.min(...ring.lineDelay), ring.readEarliest + Math.max(...ring.lineDelay)];
+    };
+    expect([fastest(8), fastest(10)]).toEqual([[141, 145], [152, 158]]);
     // fastLines, per position.
     expect(makeRing(8, 90, 0, { fastLines: true }).ring.lineDelay).toEqual([75, 79, 75, 79, 75, 79, 75, 79]);
     expect(makeRing(10, 90, 0, { fastLines: true }).ring.lineDelay).toEqual([90, 90, 96, 96, 90, 90, 90, 96, 96, 90]);
@@ -261,6 +277,47 @@ describe('ring timing', () => {
         expect(extra.every((q) => /^x-(l|d)\d/.test(q.id))).toBe(true);
         expect(net.neurons.map(({ label: _, ...q }) => q)).toEqual(slow.net.neurons.filter((q) => core.has(q.id)).map(({ label: _, ...q }) => q));
       }
+  });
+});
+
+describe('read window', () => {
+  // The read may come at any offset in [readEarliest, readLatest], frame by
+  // frame; the lines follow it. Both ends are exact: one tick outside breaks.
+  for (const n of SIZES)
+    for (const fastLines of MODES)
+      it(`n=${n}${fastLines ? ' fastLines' : ''}: any read offset in the window works, one tick outside fails`, () => {
+        const units = Array.from({ length: n }, (_, s) => makeRing(n, 480, s, { fastLines }));
+        const { minF, readEarliest: E } = units[0]!.ring;
+        for (const F of [minF, 240, 480]) {
+          const Lt = F + units[0]!.ring.readLatest - 480;
+          const sc = (s: number, seed: number, read: (k: number) => number, frames = 60): Scenario => ({ F, start: s, moves: randomMoves(seed, frames), read });
+          const rng = mulberry32(F);
+          for (const seed of [1, 2]) {
+            const s = seed % n;
+            const r = Array.from({ length: 3000 }, () => E + Math.floor(rng() * (Lt - E + 1)));
+            expect(run(units[s]!, sc(s, seed, (k) => r[k]!, 3000)).error).toBeUndefined();
+          }
+          for (let s = 0; s < n; s++) {
+            // Extremes, alternating: the latest read followed by the earliest.
+            expect(run(units[s]!, sc(s, s, (k) => (k % 2 ? E : Lt))).error).toBeUndefined();
+            expect(run(units[s]!, sc(s, s, (k) => (k % 2 ? Lt : E))).error).toBeUndefined();
+          }
+          const fails = (r: number) => units.some((u, s) => [1, 2, 3].some((seed) => run(u, sc(s, seed * 10 + s, () => r)).error));
+          expect(fails(E), `F=${F}`).toBe(false);
+          expect(fails(Lt), `F=${F}`).toBe(false);
+          expect(fails(E - 1), `F=${F}`).toBe(true);
+          expect(fails(Lt + 1), `F=${F}`).toBe(true);
+        }
+      });
+
+  it('minF is exact: one tick shorter breaks the contract (with reads at readLag)', () => {
+    for (const n of SIZES) {
+      const units = Array.from({ length: n }, (_, s) => makeRing(n, 200, s));
+      const { minF } = units[0]!.ring;
+      const fails = (F: number) => units.some((u, s) => [1, 2, 3].some((seed) => run(u, { F, start: s, moves: randomMoves(seed * 10 + s, 60) }).error));
+      expect(fails(minF)).toBe(false);
+      expect(fails(minF - 1)).toBe(true);
+    }
   });
 });
 

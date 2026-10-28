@@ -35,13 +35,19 @@ import { at, type Cell, type Place } from './snake-control';
  *   line fires (default; lineAt can delay it)      343        385      readLag + lineDelay
  *   line j fires, fastLines (RR_j, 15 after R_j)   157-161    168-174  readLag + lineDelay[j]
  *     (n = 8: even j 157, odd j 161; n = 10: j = 2, 3, 7, 8 at 174, the others 168)
- *   smallest frame period                          83         81       minF
+ *   the read may fire instead at r, any of         66..F+4    62..F+4  readEarliest..readLatest
+ *     (each frame its own r; every row from the read on shifts by r - readLag;
+ *      the settled-moment row holds for reads at readLag)
+ *   fastest: fastLines, read at readEarliest       141-145    152-158
+ *   smallest frame period                          82         78       minF
  *   power fires at least this long before t_0      21         22       powerLead
  *
  * Moves and reads of consecutive frames overlap when F is short (a frame's
  * copy events span ticks 60..176 after t_k for n = 8, 75..189 for n = 10);
- * the cells keep them apart, which is what minF checks. Lines are relays
- * that never interact, so their pulses may be in flight across frames.
+ * the cells keep them apart, which is what minF checks. minF, the read window
+ * and powerLead are exact: one tick beyond each breaks a tested scenario.
+ * Lines are relays that never interact, so their pulses may be in flight
+ * across frames.
  */
 
 export interface RingOptions {
@@ -74,7 +80,10 @@ export interface Ring {
   fwd: string;
   /** Fire at t_k to move the token one position back (-1 mod n). */
   back: string;
-  /** Fire every frame at t_k + readLag. */
+  /**
+   * Fire every frame at t_k + readLag; or at t_k + r for any r in
+   * [readEarliest, readLatest], which may differ from frame to frame.
+   */
   read: string;
   /**
    * Fire once, at least powerLead ticks before t_0, the tick of the first
@@ -83,12 +92,16 @@ export interface Ring {
   power: string;
   /** Smallest tick gap from power to t_0 (exact: one tick less fails). */
   powerLead: number;
-  /** Exactly one fires per frame: lines[pos] at t_k + readLag + lineDelay[pos]. */
+  /** Exactly one fires per frame: lines[pos] at t_k + r + lineDelay[pos] (r = readLag by default). */
   lines: string[];
   readLag: number;
+  /** Earliest read offset: the read's +1 lands on every R_j after the move's arrivals. */
+  readEarliest: number;
+  /** Latest read offset (F + a layout constant): it is done before the next frame's arrivals. */
+  readLatest: number;
   /** Per position; all equal unless fastLines. */
   lineDelay: number[];
-  /** At t_k + settle every neuron of the block is at rest (restFor) until the read lands. */
+  /** At t_k + settle every neuron of the block is at rest (restFor) until the read lands (reads at readLag). */
   settle: number;
   /** Resting charge of every neuron of the block with the token at `position`. */
   restFor(position: number): Record<string, number>;
@@ -150,7 +163,8 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
   };
   return {
     fwd: id('fwd'), back: id('back'), read: id('read'), power: id('power'),
-    powerLead: powerLeadFor(n, L.cells, start, T.readLag),
+    powerLead: powerLeadFor(n, L.cells, start, T.readEarliest),
+    readEarliest: T.readEarliest, readLatest: F + T.readSlack,
     lines: fast ? rr : ring('l'), readLag: T.readLag, lineDelay, settle: T.settle, restFor, minF: T.minF,
     copies: { f, b: bk, r },
   };
@@ -306,51 +320,64 @@ function relayPath(a: Cell, z: Cell, ticks: number, free: Cell[]): Cell[] | unde
   return best;
 }
 
-/** Arrivals on R_j caused by any move (tokens from F_{j-1}, B_{j+1}; clears via IF_j, IB_j). */
-function arrivalsOnR(n: number, cells: Map<string, Cell>, j: number): number[] {
-  const c = (role: string) => cells.get(role)!;
-  const pv = (j + n - 1) % n;
-  const nx = (j + 1) % n;
-  const R = c(`r${j}`);
-  return [
-    tt(c('fwd'), c(`f${pv}`)) + tt(c(`f${pv}`), R),
-    tt(c('back'), c(`b${nx}`)) + tt(c(`b${nx}`), R),
-    tt(c('fwd'), c(`f${j}`)) + tt(c(`f${j}`), c(`if${j}`)) + tt(c(`if${j}`), R),
-    tt(c('back'), c(`b${j}`)) + tt(c(`b${j}`), c(`ib${j}`)) + tt(c(`ib${j}`), R),
-  ];
+/** A pulse landing on a cell: [arrival tick, creation tick]. */
+type Hit = [number, number];
+
+/**
+ * Smallest shift d (ticks, may be negative) such that pulse a, sent d ticks
+ * later, lands after pulse b: a later tick, or the same tick and created
+ * later (the engine lands the older of two same-tick pulses first).
+ */
+function minShift(a: Hit, b: Hit): number {
+  const d = b[0] - a[0];
+  return a[1] + d > b[1] ? d : d + 1;
+}
+
+/** Arrivals on R_j a move can cause: tokens (+1) from F_{j-1}, B_{j+1}; clears (-1) via IF_j, IB_j. */
+function arrivalsOnR(n: number, cells: Map<string, Cell>, j: number): { tokens: Hit[]; clears: Hit[] } {
+  const t = (a: string, z: string) => tt(cells.get(a)!, cells.get(z)!);
+  const [pv, nx, R] = [`${(j + n - 1) % n}`, `${(j + 1) % n}`, `r${j}`];
+  const via = (src: string, X: string, I: string): Hit => [t(src, X) + t(X, I) + t(I, R), t(src, X) + t(X, I)];
+  return {
+    tokens: [[t('fwd', `f${pv}`) + t(`f${pv}`, R), t('fwd', `f${pv}`)], [t('back', `b${nx}`) + t(`b${nx}`, R), t('back', `b${nx}`)]],
+    clears: [via('fwd', `f${j}`, `if${j}`), via('back', `b${j}`, `ib${j}`)],
+  };
 }
 
 // ---- timing ------------------------------------------------------------------
 
 interface RingTiming {
   readLag: number;
+  readEarliest: number;
+  /** readLatest = F + readSlack. */
+  readSlack: number;
   settle: number;
   minF: number;
 }
 
 /**
  * Every timing fact of the layout, relative to t_k (the tick fwd/back fires),
- * derived from cell distances. Throws if a token could land inside its
- * destination's pair gap or a restore before its read -1.
+ * derived from cell distances. Throws if a pulse could land in the wrong
+ * order on a copy (a token inside its pair gap, a restore before the read -1).
  *
- * The settled moment t_k + settle comes after every arrival a move causes and
- * before the read: all copies then hold the new position. The read follows at
- * once. The frame period (minF) must let each R copy finish its read before
- * the next move reaches it, each F/B copy see this move's last arrival before
- * the next pair, and the next frame's first arrival come after the settled
- * moment.
+ * The settled moment t_k + settle comes after every arrival a move causes;
+ * the default read (readLag) lands on R copies right after it. The read may
+ * come at any offset r in [readEarliest, F + readSlack]: on each R_j, its +1
+ * not before this frame's tokens and after its clears, its -1 after both;
+ * the next frame's tokens after its -1 (an empty copy must not see +1 +1
+ * across ticks), clears after its +1 (the holder must fire first) and read
+ * +1 after its restore. The holder's restore and a clear may land in either
+ * order: the charge never reaches 1. minF keeps the next
+ * frame's first arrival after the settled moment, readLag in the window and
+ * the previous read done by the settled moment.
  */
 function ringTiming(n: number, L: RingLayout): RingTiming {
   const c = (role: string) => L.cells.get(role)!;
   const t = (a: string, z: string) => tt(c(a), c(z));
   const mod = (j: number) => (j + n) % n;
-  /**
-   * Pulse a lands on a cell after pulse b: a later tick, or the same tick and
-   * a later creation tick (the engine lands the older pulse first). Pulses
-   * are [arrival, creation] ticks; a full tie is treated as unsafe.
-   */
-  const after = (a: [number, number], b: [number, number], what: string) => {
-    if (!(a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]))) throw new Error(`ring: ${what}`);
+  /** Throw unless pulse a lands after pulse b. */
+  const after = (a: Hit, b: Hit, what: string) => {
+    if (minShift(a, b) > 0) throw new Error(`ring: ${what}`);
   };
   let settle = 0;
   const first: number[] = [];
@@ -362,47 +389,61 @@ function ringTiming(n: number, L: RingLayout): RingTiming {
     for (let j = 0; j < n; j++) {
       const [X, M, from] = [`${s}${j}`, `m${s}${j}`, `${s}${mod(j - step)}`];
       const oFrom = `${o}${mod(j + step)}`;
-      const pair = t(src, X);
-      const pairMinus = t(src, M) + t(M, X);
-      const token = t(src, from) + t(from, X);
-      after([pairMinus, t(src, M)], [pair, 0], `pair -1 lands on ${X} before its +1`);
-      after([token, t(src, from)], [pairMinus, t(src, M)], `token lands on ${X} inside its pair gap`);
+      const pair: Hit = [t(src, X), 0];
+      const pairMinus: Hit = [t(src, M) + t(M, X), t(src, M)];
+      const token: Hit = [t(src, from) + t(from, X), t(src, from)];
+      after(pairMinus, pair, `pair -1 lands on ${X} before its +1`);
+      after(token, pairMinus, `token lands on ${X} inside its pair gap`);
       // Other-type token, other-type stale clear (a move of the other kind).
       const otherToken = t(osrc, oFrom) + t(oFrom, X);
       const clear = t(osrc, `${o}${j}`) + t(`${o}${j}`, `${oinh}${j}`) + t(`${oinh}${j}`, X);
-      const all = [pair, pairMinus, token, otherToken, clear];
+      const all = [pair[0], pairMinus[0], token[0], otherToken, clear];
       settle = Math.max(settle, ...all);
       first.push(Math.min(...all));
     }
   }
-  // R copies: a move's arrivals (tokens, clears), then the read (+1, -1, restore).
-  const S = Array.from({ length: n }, (_, j) => arrivalsOnR(n, L.cells, j));
+  // R copies: a move's arrivals, then the read: +1, -1 via rm, restore via RR_j (relative to the read).
+  let readEarliest = -Infinity;
+  let nextArrivals = -Infinity; // r <= F - nextArrivals
+  let nextRead = -Infinity; // r_k - r_{k+1} <= F - nextRead
+  let readDone = 0;
   const rA = Array.from({ length: n }, (_, j) => t('read', `r${j}`));
-  settle = Math.max(settle, ...S.flat());
-  first.push(...S.flat());
-  // The next frame's first arrival comes after this frame's settled moment.
-  let minF = settle + 1 - Math.min(...first);
-  const readLag = settle + 1 - Math.min(...rA);
   for (let j = 0; j < n; j++) {
-    // Relative to the read: [arrival, creation] of its +1, the -1 via rm, the restore via RR_j.
-    const plus: [number, number] = [rA[j]!, 0];
-    const minus: [number, number] = [t('read', 'rm') + t('rm', `r${j}`), t('read', 'rm')];
-    const restore: [number, number] = [rA[j]! + 2 * t(`r${j}`, `rr${j}`), rA[j]! + t(`r${j}`, `rr${j}`)];
+    const { tokens, clears } = arrivalsOnR(n, L.cells, j);
+    const q = t(`r${j}`, `rr${j}`);
+    const plus: Hit = [rA[j]!, 0];
+    const minus: Hit = [t('read', 'rm') + t('rm', `r${j}`), t('read', 'rm')];
+    const restore: Hit = [rA[j]! + 2 * q, rA[j]! + q];
     after(minus, plus, `read -1 lands on r${j} before its +1`);
     after(restore, minus, `restore of r${j} lands before the read -1`);
-    // R_j finishes its read before the next frame's first move arrival.
-    minF = Math.max(minF, readLag + restore[0] - Math.min(...S[j]!) + 1);
+    for (const h of [...tokens, ...clears]) {
+      settle = Math.max(settle, h[0]);
+      first.push(h[0]);
+    }
+    // A token and the read +1 may land on the empty copy in the same tick, in
+    // either order (-1 +1 +1: it fires on that tick); the -1 must come after.
+    for (const h of tokens) readEarliest = Math.max(readEarliest, h[0] - plus[0], minShift(minus, h));
+    // A clear must land on the old holder before the read +1, or it fires.
+    for (const h of clears) readEarliest = Math.max(readEarliest, minShift(plus, h));
+    for (const h of tokens) nextArrivals = Math.max(nextArrivals, minShift(h, minus));
+    for (const h of clears) nextArrivals = Math.max(nextArrivals, minShift(h, plus));
+    nextRead = Math.max(nextRead, minShift(plus, restore));
+    readDone = Math.max(readDone, restore[0]);
   }
-  return { readLag, settle, minF };
+  const readLag = settle + 1 - Math.min(...rA);
+  const readSlack = Math.min(-nextArrivals, readEarliest - nextRead);
+  if (readLag < readEarliest) throw new Error('ring: the default read is too early');
+  const minF = Math.max(settle + 1 - Math.min(...first), readLag - readSlack, readLag + readDone - settle);
+  return { readLag, readEarliest, readSlack, settle, minF };
 }
 
 /**
  * Smallest lead from power (tick p) to t_0. Power's -1 must land on every
  * empty copy no later than the first +1 that copy can get: its own pair
- * (first move), a token from the start position, or the read. On a tie it
- * lands first: it is older (p < t_0).
+ * (first move), a token from the start position, or the earliest read. On a
+ * tie it lands first: it is older (p < t_0).
  */
-function powerLeadFor(n: number, cells: Map<string, Cell>, start: number, readLag: number): number {
+function powerLeadFor(n: number, cells: Map<string, Cell>, start: number, readEarliest: number): number {
   const t = (a: string, z: string) => tt(cells.get(a)!, cells.get(z)!);
   const [s, nx, pv] = [start, (start + 1) % n, (start + n - 1) % n];
   let lead = 1;
@@ -411,7 +452,7 @@ function powerLeadFor(n: number, cells: Map<string, Cell>, start: number, readLa
     const plus = {
       [`f${j}`]: [t('fwd', `f${j}`), ...(j === pv ? [t('back', `b${s}`) + t(`b${s}`, `f${j}`)] : [])],
       [`b${j}`]: [t('back', `b${j}`), ...(j === nx ? [t('fwd', `f${s}`) + t(`f${s}`, `b${j}`)] : [])],
-      [`r${j}`]: [readLag + t('read', `r${j}`), ...(j === nx ? [t('fwd', `f${s}`) + t(`f${s}`, `r${j}`)] : []), ...(j === pv ? [t('back', `b${s}`) + t(`b${s}`, `r${j}`)] : [])],
+      [`r${j}`]: [readEarliest + t('read', `r${j}`), ...(j === nx ? [t('fwd', `f${s}`) + t(`f${s}`, `r${j}`)] : []), ...(j === pv ? [t('back', `b${s}`) + t(`b${s}`, `r${j}`)] : [])],
     };
     for (const [X, ticks] of Object.entries(plus)) lead = Math.max(lead, t('power', X) - Math.min(...ticks));
   }
