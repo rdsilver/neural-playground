@@ -134,16 +134,27 @@ describe('ring counter', () => {
       }
   });
 
-  // Below about 130 ticks consecutive frames overlap (a frame's events span
-  // ticks 60..189 after t_k); above it every frame runs alone, so a sweep up
-  // to 200 covers every way frames can interleave. One build serves every F.
-  it('works at every F from its minimum up to 200, and refuses a shorter one', () => {
+  // With reads at readLag a frame's copy events span ticks 60..176 (n = 8)
+  // or 75..189 (n = 10) after t_k: consecutive frames overlap up to F = 116
+  // or 114, and above that every frame runs alone, so a sweep up to 200
+  // covers every way they can interleave. (A read near readLatest always
+  // overlaps the next frame: the read window tests cover that at F = 240
+  // and 480.) One build serves every F.
+  it('works at every F from its minimum up to 200 (reads at readLag or anywhere in the window), and refuses a shorter one', () => {
     for (const n of SIZES)
       for (const fastLines of MODES) {
         const units = Array.from({ length: n }, (_, s) => makeRing(n, 200, s, { fastLines }));
         const { minF } = units[0]!.ring;
         expect(minF).toBe(n === 8 ? 82 : 78);
-        for (let F = minF; F <= 200; F++) drive(n, F, randomMoves(F, 40), F % n, units[F % n]);
+        for (let F = minF; F <= 200; F++) {
+          const u = units[F % n]!;
+          drive(n, F, randomMoves(F, 40), F % n, u);
+          // Again with a random read offset per frame, anywhere in the window.
+          const [E, Lt] = [u.ring.readEarliest, F + u.ring.readLatest - 200];
+          const rng = mulberry32(F);
+          const r = Array.from({ length: 40 }, () => E + Math.floor(rng() * (Lt - E + 1)));
+          expect(run(u, { F, start: F % n, moves: randomMoves(F + 1, 40), read: (k) => r[k]! }).error).toBeUndefined();
+        }
         drive(n, minF, randomMoves(7, 500), 0, makeRing(n, minF, 0, { fastLines }));
         expect(() => makeRing(n, minF - 1, 0, { fastLines })).toThrow(/below/);
       }
@@ -346,7 +357,10 @@ describe('power-on', () => {
           expect(powerLead).toBe(n === 8 ? 21 : 22);
           for (const F of [minF, 480]) {
             const sc = (m: Move, lead: number) => ({ F, start: s, lead, moves: [m, 'fwd', 'back', 'hold', 'back', 'fwd'] as Move[] });
-            for (const m of MOVES) expect(run(unit, sc(m, powerLead)).error, `n=${n} s=${s} ${m}`).toBeUndefined();
+            for (const m of MOVES) {
+              expect(run(unit, sc(m, powerLead)).error, `n=${n} s=${s} ${m}`).toBeUndefined();
+              expect(run(unit, { ...sc(m, powerLead), read: () => unit.ring.readEarliest }).error, `n=${n} s=${s} ${m} early read`).toBeUndefined();
+            }
             expect(MOVES.some((m) => run(unit, sc(m, powerLead - 1)).error), `n=${n} s=${s}`).toBe(true);
           }
         }

@@ -87,17 +87,17 @@ export interface Ring {
   read: string;
   /**
    * Fire once, at least powerLead ticks before t_0, the tick of the first
-   * frame's move (or of its hold: its read comes at t_0 + readLag).
+   * frame's move (or of its hold: its read comes at t_0 + r).
    */
   power: string;
-  /** Smallest tick gap from power to t_0 (exact: one tick less fails). */
+  /** Smallest tick gap from power to t_0, for any read offset in the window (exact: one tick less fails). */
   powerLead: number;
   /** Exactly one fires per frame: lines[pos] at t_k + r + lineDelay[pos] (r = readLag by default). */
   lines: string[];
   readLag: number;
-  /** Earliest read offset: the read's +1 lands on every R_j after the move's arrivals. */
+  /** Earliest read offset (exact): the read meets each R_j after the move's arrivals. */
   readEarliest: number;
-  /** Latest read offset (F + a layout constant): it is done before the next frame's arrivals. */
+  /** Latest read offset for this F (F + a layout constant; exact): done before the next frame's arrivals. */
   readLatest: number;
   /** Per position; all equal unless fastLines. */
   lineDelay: number[];
@@ -105,7 +105,7 @@ export interface Ring {
   settle: number;
   /** Resting charge of every neuron of the block with the token at `position`. */
   restFor(position: number): Record<string, number>;
-  /** Smallest frame period this layout supports. */
+  /** Smallest frame period this layout supports (exact, with reads at readLag). */
   minF: number;
   /** Copy neurons per position: f, b, r (for tests and probes). */
   copies: { f: string[]; b: string[]; r: string[] };
