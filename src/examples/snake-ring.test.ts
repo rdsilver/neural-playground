@@ -132,6 +132,47 @@ describe('ring timing', () => {
     expect(row(10)).toEqual({ readLag: 78, settle: 152, line: 385, minF: 81, uniform: 1 });
   });
 
+  it('copies fire, and holders are restored, at the documented ticks', () => {
+    const table = {
+      8: { holder: [60, 64], read: [142, 146] },
+      10: { holder: [75, 81], read: [153, 159] },
+    };
+    for (const n of [8, 10] as const) {
+      const F = 90;
+      const { ring, net } = makeRing(n, F);
+      const sim = new Simulation(net);
+      sim.schedule(1, ring.power);
+      const moves: Move[] = [...Array<Move>(n).fill('fwd'), ...Array<Move>(n).fill('back')];
+      const t = (k: number) => 1 + (k + 1) * F;
+      moves.forEach((m, k) => {
+        sim.schedule(t(k), ring[m as 'fwd' | 'back']);
+        sim.schedule(t(k) + ring.readLag, ring.read);
+      });
+      const kind = new Map<string, 'holder' | 'read'>([...ring.copies.f, ...ring.copies.b].map((id) => [id, 'holder'] as const));
+      ring.copies.r.forEach((id) => kind.set(id, 'read'));
+      const seen = { holder: [] as number[], read: [] as number[] };
+      const restores: Array<[string, number]> = [];
+      while (sim.tick < t(moves.length) + 2 * F) {
+        for (const e of sim.step()) {
+          const k = kind.get(e.neuron);
+          if (!k) continue;
+          seen[k].push((e.tick - 1) % F); // offset from t_k, mod F
+          if (k === 'read') restores.push([e.neuron, e.tick]);
+        }
+        for (const [id, at] of restores) {
+          if (sim.tick > at && sim.tick < at + 30) expect(sim.charge(id)).toBeLessThanOrEqual(0);
+          if (sim.tick === at + 30) expect(sim.charge(id)).toBe(0);
+        }
+      }
+      // Offsets past a frame wrap around: compare them mod F.
+      for (const k of ['holder', 'read'] as const) {
+        const [lo, hi] = table[n][k].map((v) => v % F);
+        expect(seen[k].length).toBe(moves.length);
+        expect([Math.min(...seen[k]), Math.max(...seen[k])]).toEqual([lo, hi]);
+      }
+    }
+  });
+
   it('X and Y can fire their lines on the same tick (lineAt), Y laid out as a column (transpose)', () => {
     const x = makeRing(10, 90, 0, { lineAt: 385 });
     const y = makeRing(8, 90, 0, { lineAt: 385, transpose: true });

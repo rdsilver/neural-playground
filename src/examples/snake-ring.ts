@@ -8,11 +8,11 @@ import { at, type Cell, type Place } from './snake-control';
  * Design. Position j holds the token as charge 0 in three copies F_j, B_j,
  * R_j (threshold 1); an empty copy rests at -1. Power-on digs those holes.
  * - fwd is a broadcast pair: relay Pf sends +1 to every F_j and, through
- *   F_j's own Inhibitor MF_j (placed on the way), -1 right after it. Empty copies go -1, 0, -1. The
- *   holder goes 0, 1: it fires (resetting to 0) and the -1 leaves it at -1,
- *   empty: no restore needed. Firing, F_i hands the token (+1) to F_{i+1},
- *   B_{i+1}, R_{i+1} and clears its stale copies B_i, R_i (-1) through its
- *   Inhibitor IF_i.
+ *   F_j's own Inhibitor MF_j (placed on the way), -1 right after it. Empty
+ *   copies go -1, 0, -1. The holder goes 0, 1: it fires (resetting to 0)
+ *   and the -1 leaves it at -1, empty: no restore needed. Firing, F_i hands
+ *   the token (+1) to F_{i+1}, B_{i+1}, R_{i+1} and clears its stale copies
+ *   B_i, R_i (-1) through its Inhibitor IF_i.
  * - back mirrors it: Pb/MB_j, the B copies, i-1, Inhibitor IB_i.
  * - read is a broadcast pair Pr/Mr to every R_j. The holder fires (its line)
  *   and its relay RR_j gives the token back (+1) 30 ticks later.
@@ -20,6 +20,22 @@ import { at, type Cell, type Place } from './snake-control';
  * fires twice). With each copy's -1 coming on the straight path from the
  * source, that holds by the triangle inequality wherever the cells are;
  * ringTiming() checks it, and every other timing fact, from the cells.
+ *
+ * Frame schedule, ticks after t_k (fwd or back fires; a hold frame skips the
+ * move rows). Asserted in snake-ring.test.ts.
+ *
+ *   event                                          n = 8      n = 10
+ *   pair +1 then -1 on every F_j (or B_j)          60-64      75-81    holder fires
+ *   tokens and stale clears land                   ..141      ..152
+ *   settled moment: all at rest (restFor)          141        152      settle
+ *   read fires                                     82         78       readLag
+ *   read +1 on every R_j, holder fires             142-146    153-159
+ *   holder's restore lands                         172-176    183-189
+ *   line fires (default; lineAt can delay it)      343        385      readLag + lineDelay
+ *   smallest frame period                          83         81       minF
+ *
+ * Moves and reads of consecutive frames overlap (a frame is shorter than the
+ * schedule); the cells keep them apart, which is what minF checks.
  */
 
 export interface RingOptions {
@@ -41,7 +57,7 @@ export interface RingOptions {
 }
 
 export interface Ring {
-  /** Fire at t_k to move the token one position forward (+1 mod n). */
+  /** Fire at t_k to move the token one position forward (+1 mod n). At most one of fwd/back per frame. */
   fwd: string;
   /** Fire at t_k to move the token one position back (-1 mod n). */
   back: string;
@@ -126,7 +142,7 @@ const tt = (a: Cell, b: Cell) => travelTicks(a, b);
 const ck = (c: Cell) => `${c.x},${c.y}`;
 
 /** Radius of the circle of clusters (cells from the read source). */
-export const ringRadius = (n: number) => n / 2;
+const ringRadius = (n: number) => n / 2;
 
 /**
  * Local layout (y down, read source at the origin). Every cluster is the
@@ -143,7 +159,7 @@ export const ringRadius = (n: number) => n / 2;
  *            Pf Pr Pb                                F  R  B
  *               ON                                   (MF, MB inside)
  */
-export function ringLayout(n: number): RingLayout {
+function ringLayout(n: number): RingLayout {
   const cells = new Map<string, Cell>();
   const taken = (c: Cell) => [...cells.values()].some((q) => q.x === c.x && q.y === c.y);
   const add = (role: string, c: Cell) => {
@@ -157,7 +173,6 @@ export function ringLayout(n: number): RingLayout {
   add('power', { x: 0, y: 1 });
   const at0 = (role: string) => cells.get(role)!;
   const rho = ringRadius(n);
-  const side: number[] = [];
   for (let j = 0; j < n; j++) {
     const th = -Math.PI / 2 + (2 * Math.PI * j) / n;
     const o = Math.sin(th) < -1e-9 || (Math.abs(Math.sin(th)) < 1e-9 && Math.cos(th) > 0) ? -1 : 1; // helper row: above in the upper half
@@ -178,7 +193,6 @@ export function ringLayout(n: number): RingLayout {
     add(`if${j}`, { x: r.x - 1, y: r.y + o });
     add(`rr${j}`, { x: r.x, y: r.y + o });
     add(`ib${j}`, { x: r.x + 1, y: r.y + o });
-    side.push(o);
   }
   /** The free cell within `reach` of `ideal` with the lowest score. */
   const pick = (ideal: { x: number; y: number }, score: (c: Cell) => number, reach = 1.5): Cell => {
@@ -266,7 +280,7 @@ function relayPath(a: Cell, z: Cell, ticks: number, free: Cell[]): Cell[] | unde
 }
 
 /** Arrivals on R_j caused by any move (tokens from F_{j-1}, B_{j+1}; clears via IF_j, IB_j). */
-export function arrivalsOnR(n: number, cells: Map<string, Cell>, j: number): number[] {
+function arrivalsOnR(n: number, cells: Map<string, Cell>, j: number): number[] {
   const c = (role: string) => cells.get(role)!;
   const pv = (j + n - 1) % n;
   const nx = (j + 1) % n;
@@ -294,16 +308,18 @@ interface RingTiming {
  *
  * The settled moment t_k + settle comes after every arrival a move causes and
  * before the read: all copies then hold the new position. The read follows at
- * once; it must be over on each R copy before the next move reaches it, and
- * each F/B copy must have seen this move's last arrival before the next pair
- * (these two bound the frame period: minF).
+ * once. The frame period (minF) must let each R copy finish its read before
+ * the next move reaches it, each F/B copy see this move's last arrival before
+ * the next pair, and the next frame's first arrival come after the settled
+ * moment.
  */
-export function ringTiming(n: number, L: RingLayout): RingTiming {
+function ringTiming(n: number, L: RingLayout): RingTiming {
   const c = (role: string) => L.cells.get(role)!;
   const t = (a: string, z: string) => tt(c(a), c(z));
   const mod = (j: number) => (j + n) % n;
   let minF = 0;
   let settle = 0;
+  const first: number[] = [];
   // F and B copies: type s is broadcast by src (+1) and minus (-1); its token moves by step.
   for (const [s, src, step, o, osrc, oinh] of [
     ['f', 'fwd', 1, 'b', 'back', 'ib'],
@@ -322,12 +338,15 @@ export function ringTiming(n: number, L: RingLayout): RingTiming {
       const last = Math.max(pairMinus, token, otherToken, clear);
       minF = Math.max(minF, last - pair + 1);
       settle = Math.max(settle, last);
+      first.push(pair);
     }
   }
   // R copies: a move's arrivals (tokens, clears), then the read (+1, -1, restore).
   const S = Array.from({ length: n }, (_, j) => arrivalsOnR(n, L.cells, j));
   const rA = Array.from({ length: n }, (_, j) => t('read', `r${j}`));
   settle = Math.max(settle, ...S.flat());
+  first.push(...S.flat());
+  minF = Math.max(minF, settle + 1 - Math.min(...first));
   const readLag = settle + 1 - Math.min(...rA);
   for (let j = 0; j < n; j++) {
     const minus = t('read', 'rm') + t('rm', `r${j}`);
