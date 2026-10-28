@@ -171,11 +171,11 @@ describe('ring timing', () => {
    *   settled moment (all at rest)             141      152     = settle
    *   read fires                                82       78     = readLag
    *   read may fire instead at r in            66..F+4  62..F+4  = [readEarliest, readLatest]
-   *   fastLines, read at readEarliest         141-145  152-158
    *   read +1 lands on every R_j (holder fires)142-146  153-159
    *   holder's restore lands                  172-176  183-189
    *   line j fires                             343      385     = readLag + lineDelay (or lineAt)
    *   line j fires, fastLines                 157-161  168-174  = readLag + lineDelay[j]
+   *   line j fires, fastLines, read at E      141-145  152-158  = readEarliest + lineDelay[j]
    *   minimum frame period                      82       78     = minF
    *   power lead before t_0                     21       22     = powerLead
    */
