@@ -19,7 +19,7 @@ export interface Place {
   sx: 1 | -1;
   sy?: 1 | -1;
 }
-const at = (f: Place, x: number, y: number): Cell => ({ x: f.x0 + f.sx * x, y: f.y0 + (f.sy ?? 1) * y });
+export const at = (f: Place, x: number, y: number): Cell => ({ x: f.x0 + f.sx * x, y: f.y0 + (f.sy ?? 1) * y });
 
 /** Neuron ids of one bit (flip-flop + register). */
 export interface BitIds {
@@ -142,7 +142,7 @@ export interface ControlUnit {
  * in free cells near `near`; among the fewest-relay lines, the shortest
  * wiring wins. Deterministic.
  */
-function findDelay(a: Cell, to: Cell, total: number, near: Cell, taken: (c: Cell) => boolean): Cell[] | undefined {
+export function findDelay(a: Cell, to: Cell, total: number, near: Cell, taken: (c: Cell) => boolean): Cell[] | undefined {
   const cells: Cell[] = [];
   for (let dx = -6; dx <= 6; dx++) for (let dy = -6; dy <= 6; dy++) if (!taken({ x: near.x + dx, y: near.y + dy })) cells.push({ x: near.x + dx, y: near.y + dy });
   const dist = (p: Cell, q: Cell) => Math.hypot(p.x - q.x, p.y - q.y);
