@@ -142,7 +142,7 @@ export interface ControlUnit {
  * in free cells near `near`; among the fewest-relay lines, the shortest
  * wiring wins. Deterministic.
  */
-export function findDelay(a: Cell, to: Cell, total: number, near: Cell, taken: (c: Cell) => boolean): Cell[] | undefined {
+function findDelay(a: Cell, to: Cell, total: number, near: Cell, taken: (c: Cell) => boolean): Cell[] | undefined {
   const cells: Cell[] = [];
   for (let dx = -6; dx <= 6; dx++) for (let dy = -6; dy <= 6; dy++) if (!taken({ x: near.x + dx, y: near.y + dy })) cells.push({ x: near.x + dx, y: near.y + dy });
   const dist = (p: Cell, q: Cell) => Math.hypot(p.x - q.x, p.y - q.y);
