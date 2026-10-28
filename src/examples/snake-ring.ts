@@ -54,6 +54,13 @@ export interface RingOptions {
   lineAt?: number;
   /** Swap local x and y before `place`: the line row becomes a column. */
   transpose?: boolean;
+  /**
+   * Cut latency: lines[j] is R_j's restore relay RR_j (the cell next to R_j,
+   * in the cluster's outer row), so it fires 15 ticks after R_j, about 200
+   * ticks sooner than the line row. No line row is built; lineDelay differs
+   * per position (see the schedule). Not combinable with lineAt.
+   */
+  fastLines?: boolean;
 }
 
 export interface Ring {
@@ -63,11 +70,17 @@ export interface Ring {
   back: string;
   /** Fire every frame at t_k + readLag. */
   read: string;
-  /** Fire once, at least a frame before the first move or read. */
+  /**
+   * Fire once, at least powerLead ticks before t_0, the tick of the first
+   * frame's move (or of its hold: its read comes at t_0 + readLag).
+   */
   power: string;
+  /** Smallest tick gap from power to t_0 (exact: one tick less fails). */
+  powerLead: number;
   /** Exactly one fires per frame: lines[pos] at t_k + readLag + lineDelay[pos]. */
   lines: string[];
   readLag: number;
+  /** Per position; all equal unless fastLines. */
   lineDelay: number[];
   /** At t_k + settle every neuron of the block is at rest (restFor) until the read lands. */
   settle: number;
@@ -82,10 +95,16 @@ export interface Ring {
 export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): Ring {
   const { n, F, prefix } = opts;
   const start = opts.start ?? 0;
+  const fast = opts.fastLines ?? false;
+  if (fast && opts.lineAt !== undefined) throw new Error(`ring ${prefix}: lineAt needs the line row (no fastLines)`);
   const L = ringLayout(n);
   const T = ringTiming(n, L);
-  const lineDelay = addLines(n, L, (opts.lineAt ?? 0) - T.readLag);
-  if (opts.lineAt !== undefined && T.readLag + lineDelay !== opts.lineAt) throw new Error(`ring ${prefix}: lines cannot fire at ${opts.lineAt}`);
+  const tt0 = (a: string, z: string) => tt(L.cells.get(a)!, L.cells.get(z)!);
+  // fastLines: line j = RR_j, which fires tt(R_j, RR_j) after R_j fires.
+  const lineDelay = fast
+    ? Array.from({ length: n }, (_, j) => tt0('read', `r${j}`) + tt0(`r${j}`, `rr${j}`))
+    : Array<number>(n).fill(addLines(n, L, (opts.lineAt ?? 0) - T.readLag));
+  if (opts.lineAt !== undefined && T.readLag + lineDelay[0]! !== opts.lineAt) throw new Error(`ring ${prefix}: lines cannot fire at ${opts.lineAt}`);
   if (F < T.minF) throw new Error(`ring ${prefix}: F=${F} is below this layout's minimum ${T.minF}`);
   const id = (role: string) => `${prefix}-${role}`;
   const cell = (role: string) => {
@@ -93,9 +112,10 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
     return opts.transpose ? at(place, c.y, c.x) : at(place, c.x, c.y);
   };
   const labels: Record<string, string> = { fwd: 'FWD', back: 'BACK', read: 'READ', power: 'ON' };
+  const lineRole = fast ? /^rr(\d+)$/ : /^l(\d+)$/; // the line neurons are labelled with their position
   for (const role of L.cells.keys()) {
     const { x, y } = cell(role);
-    const label = labels[role] ?? (/^l\d+$/.test(role) ? role.slice(1) : undefined);
+    const label = labels[role] ?? role.match(lineRole)?.[1];
     const o = { id: id(role), ...(label ? { label } : {}) };
     if (/^(rm|power|(if|ib|mf|mb)\d+)$/.test(role)) b.inhibitor(x, y, 1, { label: '−1', ...o });
     else b.normal(x, y, 1, o);
@@ -113,7 +133,7 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
     b.connect(f[j]!, [f[nx]!, bk[nx]!, r[nx]!, inf[j]!]).connect(inf[j]!, [bk[j]!, r[j]!]);
     b.connect(bk[j]!, [f[pv]!, bk[pv]!, r[pv]!, inb[j]!]).connect(inb[j]!, [f[j]!, r[j]!]);
     b.connect(r[j]!, rr[j]!).connect(rr[j]!, r[j]!);
-    b.chain([r[j]!, ...L.lineRelays[j]!.map(id), id(`l${j}`)]);
+    if (!fast) b.chain([r[j]!, ...L.lineRelays[j]!.map(id), id(`l${j}`)]);
     if (j !== start) b.connect(id('power'), [f[j]!, bk[j]!, r[j]!]);
   }
   const all = [...L.cells.keys()].map(id);
@@ -124,7 +144,8 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
   };
   return {
     fwd: id('fwd'), back: id('back'), read: id('read'), power: id('power'),
-    lines: ring('l'), readLag: T.readLag, lineDelay: Array<number>(n).fill(lineDelay), settle: T.settle, restFor, minF: T.minF,
+    powerLead: powerLeadFor(n, L.cells, start, T.readLag),
+    lines: fast ? rr : ring('l'), readLag: T.readLag, lineDelay, settle: T.settle, restFor, minF: T.minF,
     copies: { f, b: bk, r },
   };
 }
@@ -317,7 +338,14 @@ function ringTiming(n: number, L: RingLayout): RingTiming {
   const c = (role: string) => L.cells.get(role)!;
   const t = (a: string, z: string) => tt(c(a), c(z));
   const mod = (j: number) => (j + n) % n;
-  let minF = 0;
+  /**
+   * Pulse a lands on a cell after pulse b: a later tick, or the same tick and
+   * a later creation tick (the engine lands the older pulse first). Pulses
+   * are [arrival, creation] ticks; a full tie is treated as unsafe.
+   */
+  const after = (a: [number, number], b: [number, number], what: string) => {
+    if (!(a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]))) throw new Error(`ring: ${what}`);
+  };
   let settle = 0;
   const first: number[] = [];
   // F and B copies: type s is broadcast by src (+1) and minus (-1); its token moves by step.
@@ -326,19 +354,19 @@ function ringTiming(n: number, L: RingLayout): RingTiming {
     ['b', 'back', -1, 'f', 'fwd', 'if'],
   ] as const) {
     for (let j = 0; j < n; j++) {
-      const from = mod(j - step);
-      const oFrom = mod(j + step);
-      const pair = t(src, `${s}${j}`);
-      const pairMinus = t(src, `m${s}${j}`) + t(`m${s}${j}`, `${s}${j}`);
-      const token = t(src, `${s}${from}`) + t(`${s}${from}`, `${s}${j}`);
-      if (token < pairMinus) throw new Error(`ring: token lands on ${s}${j} inside its pair gap`);
-      // Own pair -1, own-type token, other-type token, other-type stale clear.
-      const otherToken = t(osrc, `${o}${oFrom}`) + t(`${o}${oFrom}`, `${s}${j}`);
-      const clear = t(osrc, `${o}${j}`) + t(`${o}${j}`, `${oinh}${j}`) + t(`${oinh}${j}`, `${s}${j}`);
-      const last = Math.max(pairMinus, token, otherToken, clear);
-      minF = Math.max(minF, last - pair + 1);
-      settle = Math.max(settle, last);
-      first.push(pair);
+      const [X, M, from] = [`${s}${j}`, `m${s}${j}`, `${s}${mod(j - step)}`];
+      const oFrom = `${o}${mod(j + step)}`;
+      const pair = t(src, X);
+      const pairMinus = t(src, M) + t(M, X);
+      const token = t(src, from) + t(from, X);
+      after([pairMinus, t(src, M)], [pair, 0], `pair -1 lands on ${X} before its +1`);
+      after([token, t(src, from)], [pairMinus, t(src, M)], `token lands on ${X} inside its pair gap`);
+      // Other-type token, other-type stale clear (a move of the other kind).
+      const otherToken = t(osrc, oFrom) + t(oFrom, X);
+      const clear = t(osrc, `${o}${j}`) + t(`${o}${j}`, `${oinh}${j}`) + t(`${oinh}${j}`, X);
+      const all = [pair, pairMinus, token, otherToken, clear];
+      settle = Math.max(settle, ...all);
+      first.push(Math.min(...all));
     }
   }
   // R copies: a move's arrivals (tokens, clears), then the read (+1, -1, restore).
@@ -346,13 +374,40 @@ function ringTiming(n: number, L: RingLayout): RingTiming {
   const rA = Array.from({ length: n }, (_, j) => t('read', `r${j}`));
   settle = Math.max(settle, ...S.flat());
   first.push(...S.flat());
-  minF = Math.max(minF, settle + 1 - Math.min(...first));
+  // The next frame's first arrival comes after this frame's settled moment.
+  let minF = settle + 1 - Math.min(...first);
   const readLag = settle + 1 - Math.min(...rA);
   for (let j = 0; j < n; j++) {
-    const minus = t('read', 'rm') + t('rm', `r${j}`);
-    const restore = rA[j]! + 2 * t(`r${j}`, `rr${j}`);
-    if (restore < minus) throw new Error(`ring: restore of r${j} lands before the read -1`);
-    minF = Math.max(minF, readLag + Math.max(minus, restore) - Math.min(...S[j]!) + 1);
+    // Relative to the read: [arrival, creation] of its +1, the -1 via rm, the restore via RR_j.
+    const plus: [number, number] = [rA[j]!, 0];
+    const minus: [number, number] = [t('read', 'rm') + t('rm', `r${j}`), t('read', 'rm')];
+    const restore: [number, number] = [rA[j]! + 2 * t(`r${j}`, `rr${j}`), rA[j]! + t(`r${j}`, `rr${j}`)];
+    after(minus, plus, `read -1 lands on r${j} before its +1`);
+    after(restore, minus, `restore of r${j} lands before the read -1`);
+    // R_j finishes its read before the next frame's first move arrival.
+    minF = Math.max(minF, readLag + restore[0] - Math.min(...S[j]!) + 1);
   }
   return { readLag, settle, minF };
+}
+
+/**
+ * Smallest lead from power (tick p) to t_0. Power's -1 must land on every
+ * empty copy no later than the first +1 that copy can get: its own pair
+ * (first move), a token from the start position, or the read. On a tie it
+ * lands first: it is older (p < t_0).
+ */
+function powerLeadFor(n: number, cells: Map<string, Cell>, start: number, readLag: number): number {
+  const t = (a: string, z: string) => tt(cells.get(a)!, cells.get(z)!);
+  const [s, nx, pv] = [start, (start + 1) % n, (start + n - 1) % n];
+  let lead = 1;
+  for (let j = 0; j < n; j++) {
+    if (j === s) continue;
+    const plus = {
+      [`f${j}`]: [t('fwd', `f${j}`), ...(j === pv ? [t('back', `b${s}`) + t(`b${s}`, `f${j}`)] : [])],
+      [`b${j}`]: [t('back', `b${j}`), ...(j === nx ? [t('fwd', `f${s}`) + t(`f${s}`, `b${j}`)] : [])],
+      [`r${j}`]: [readLag + t('read', `r${j}`), ...(j === nx ? [t('fwd', `f${s}`) + t(`f${s}`, `r${j}`)] : []), ...(j === pv ? [t('back', `b${s}`) + t(`b${s}`, `r${j}`)] : [])],
+    };
+    for (const [X, ticks] of Object.entries(plus)) lead = Math.max(lead, t('power', X) - Math.min(...ticks));
+  }
+  return lead;
 }
