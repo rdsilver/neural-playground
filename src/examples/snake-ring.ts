@@ -19,7 +19,8 @@ import { at, type Cell, type Place } from './snake-control';
  * A token must land on its new copy after that copy's own pair -1 (else it
  * fires twice). With each copy's -1 coming on the straight path from the
  * source, that holds by the triangle inequality wherever the cells are;
- * ringTiming() checks it, and every other timing fact, from the cells.
+ * ringTiming() checks it, and every other timing fact, from the cells
+ * (same-tick arrivals by creation order, the order the engine lands them).
  *
  * Frame schedule, ticks after t_k (fwd or back fires; a hold frame skips the
  * move rows). Asserted in snake-ring.test.ts.
@@ -32,10 +33,15 @@ import { at, type Cell, type Place } from './snake-control';
  *   read +1 on every R_j, holder fires             142-146    153-159
  *   holder's restore lands                         172-176    183-189
  *   line fires (default; lineAt can delay it)      343        385      readLag + lineDelay
+ *   line j fires, fastLines (RR_j, 15 after R_j)   157-161    168-174  readLag + lineDelay[j]
+ *     (n = 8: even j 157, odd j 161; n = 10: j = 2, 3, 7, 8 at 174, the others 168)
  *   smallest frame period                          83         81       minF
+ *   power fires at least this long before t_0      21         22       powerLead
  *
- * Moves and reads of consecutive frames overlap (a frame is shorter than the
- * schedule); the cells keep them apart, which is what minF checks.
+ * Moves and reads of consecutive frames overlap when F is short (a frame's
+ * copy events span ticks 60..176 after t_k for n = 8, 75..189 for n = 10);
+ * the cells keep them apart, which is what minF checks. Lines are relays
+ * that never interact, so their pulses may be in flight across frames.
  */
 
 export interface RingOptions {
