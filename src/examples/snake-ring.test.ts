@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { NetworkBuilder, Simulation, travelTicks, type Network } from '../engine';
 import { mulberry32 } from '../engine/rng';
-import { buildRing } from './snake-ring';
+import { buildRing, type RingOptions } from './snake-ring';
 
 type Move = 'fwd' | 'back' | 'hold';
 const travel = (net: Network, a: string, b: string) => travelTicks(net.neurons.find((q) => q.id === a)!, net.neurons.find((q) => q.id === b)!);
 const MOVES: readonly Move[] = ['fwd', 'back', 'hold'];
 
-function makeRing(n: number, F: number, start = 0) {
+function makeRing(n: number, F: number, start = 0, extra: Partial<RingOptions> = {}) {
   const b = new NetworkBuilder();
-  const ring = buildRing(b, { x0: 20, y0: 20, sx: 1 }, { n, F, prefix: 'x', start });
+  const ring = buildRing(b, { x0: 20, y0: 20, sx: 1 }, { n, F, prefix: 'x', start, ...extra });
   return { ring, net: b.build() };
 }
 
@@ -120,7 +120,7 @@ describe('ring timing', () => {
    *   settled moment (all at rest)             141     152     = settle
    *   read fires                                82      78     = readLag
    *   read +1 lands on every R_j (holder fires)142-146 153-159
-   *   line j fires                             330     371     = readLag + lineDelay
+   *   line j fires                             343     385     = readLag + lineDelay (or lineAt)
    *   minimum frame period                      83      81     = minF
    */
   it('matches the documented schedule', () => {
@@ -128,7 +128,31 @@ describe('ring timing', () => {
       const { ring } = makeRing(n, 90);
       return { readLag: ring.readLag, settle: ring.settle, line: ring.readLag + ring.lineDelay[0]!, minF: ring.minF, uniform: new Set(ring.lineDelay).size };
     };
-    expect(row(8)).toEqual({ readLag: 82, settle: 141, line: 330, minF: 83, uniform: 1 });
-    expect(row(10)).toEqual({ readLag: 78, settle: 152, line: 371, minF: 81, uniform: 1 });
+    expect(row(8)).toEqual({ readLag: 82, settle: 141, line: 343, minF: 83, uniform: 1 });
+    expect(row(10)).toEqual({ readLag: 78, settle: 152, line: 385, minF: 81, uniform: 1 });
+  });
+
+  it('X and Y can fire their lines on the same tick (lineAt), Y laid out as a column (transpose)', () => {
+    const x = makeRing(10, 90, 0, { lineAt: 385 });
+    const y = makeRing(8, 90, 0, { lineAt: 385, transpose: true });
+    expect(x.ring.readLag + x.ring.lineDelay[0]!).toBe(385);
+    expect(y.ring.readLag + y.ring.lineDelay[0]!).toBe(385);
+    for (const [n, unit] of [[10, x], [8, y]] as const) drive(n, 90, randomMoves(n, 400), 0, unit);
+    expect(() => makeRing(10, 90, 0, { lineAt: 300 })).toThrow(/cannot fire/);
+  });
+
+  it('lines form a straight row at pitch 1, in order, on the edge of the block', () => {
+    for (const transpose of [false, true])
+      for (const n of [8, 10]) {
+        const { ring, net } = makeRing(n, 90, 0, { transpose });
+        const cell = (id: string) => net.neurons.find((q) => q.id === id)!;
+        const [u, v] = transpose ? (['y', 'x'] as const) : (['x', 'y'] as const);
+        const lines = ring.lines.map(cell);
+        lines.forEach((l, j) => {
+          expect(l[u] - lines[0]![u]).toBe(j);
+          expect(l[v]).toBe(lines[0]![v]);
+        });
+        expect(Math.max(...net.neurons.map((q) => q[v]))).toBe(lines[0]![v]);
+      }
   });
 });

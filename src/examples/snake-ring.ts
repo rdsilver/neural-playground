@@ -1,5 +1,5 @@
 import { NetworkBuilder, travelTicks } from '../engine';
-import { at, findDelay, type Cell, type Place } from './snake-control';
+import { at, type Cell, type Place } from './snake-control';
 
 /**
  * Ring counter of the Neural Snake: a one-hot register of n positions with
@@ -31,6 +31,13 @@ export interface RingOptions {
   prefix: string;
   /** Position the power-on pulse puts the token at (default 0). */
   start?: number;
+  /**
+   * Ticks after t_k at which the lines should fire (default: as early as
+   * possible). Lets the X and Y rings fire their lines on the same tick.
+   */
+  lineAt?: number;
+  /** Swap local x and y before `place`: the line row becomes a column. */
+  transpose?: boolean;
 }
 
 export interface Ring {
@@ -61,9 +68,14 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
   const start = opts.start ?? 0;
   const L = ringLayout(n);
   const T = ringTiming(n, L);
+  const lineDelay = addLines(n, L, (opts.lineAt ?? 0) - T.readLag);
+  if (opts.lineAt !== undefined && T.readLag + lineDelay !== opts.lineAt) throw new Error(`ring ${prefix}: lines cannot fire at ${opts.lineAt}`);
   if (F < T.minF) throw new Error(`ring ${prefix}: F=${F} is below this layout's minimum ${T.minF}`);
   const id = (role: string) => `${prefix}-${role}`;
-  const cell = (role: string) => at(place, L.cells.get(role)!.x, L.cells.get(role)!.y);
+  const cell = (role: string) => {
+    const c = L.cells.get(role)!;
+    return opts.transpose ? at(place, c.y, c.x) : at(place, c.x, c.y);
+  };
   const labels: Record<string, string> = { fwd: 'FWD', back: 'BACK', read: 'READ', power: 'ON' };
   for (const role of L.cells.keys()) {
     const { x, y } = cell(role);
@@ -96,7 +108,7 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
   };
   return {
     fwd: id('fwd'), back: id('back'), read: id('read'), power: id('power'),
-    lines: ring('l'), readLag: T.readLag, lineDelay: Array<number>(n).fill(T.lineDelay), settle: T.settle, restFor, minF: T.minF,
+    lines: ring('l'), readLag: T.readLag, lineDelay: Array<number>(n).fill(lineDelay), settle: T.settle, restFor, minF: T.minF,
     copies: { f, b: bk, r },
   };
 }
@@ -106,10 +118,8 @@ export function buildRing(b: NetworkBuilder, place: Place, opts: RingOptions): R
 interface RingLayout {
   /** Local cell of every neuron, by role (fwd, fm, f3, ib7, d2.0, l2, ...). */
   cells: Map<string, Cell>;
-  /** Roles of the relays between R_j and its line L_j. */
+  /** Roles of the relays between R_j and its line L_j (set by addLines). */
   lineRelays: string[][];
-  /** Ticks from the read source firing to every line. */
-  lineDelay: number;
 }
 
 const tt = (a: Cell, b: Cell) => travelTicks(a, b);
@@ -194,29 +204,65 @@ export function ringLayout(n: number): RingLayout {
       add(`m${s}${j}`, pick({ x: X.x - (X.x - P.x) / u, y: X.y - (X.y - P.y) / u }, (c) => 10 * (tt(P, c) + tt(c, X) - tt(P, X)), 2.5));
     }
 
-  // Lines: a row under the loop, in order, one cell apart. Each R_j drives
-  // L_j through 1-3 relays so that every line fires the same number of ticks
-  // after the read source.
-  const yLine = Math.max(...[...cells.values()].map((c) => c.y)) + 2;
+  return { cells, lineRelays: [] };
+}
+
+/**
+ * Lines: a row under the loop, in order, one cell apart. Each R_j drives L_j
+ * through one or two relays (outside the loop, above the line row) so that
+ * every line fires the same number of ticks after the read source: the
+ * smallest such number that is at least `atLeast`. Returns it.
+ */
+function addLines(n: number, L: RingLayout, atLeast: number): number {
+  const { cells } = L;
+  const at0 = (role: string) => cells.get(role)!;
+  const all = [...cells.values()];
+  const box = { x0: Math.min(...all.map((c) => c.x)), x1: Math.max(...all.map((c) => c.x)), y0: Math.min(...all.map((c) => c.y)), y1: Math.max(...all.map((c) => c.y)) };
+  const yLine = box.y1 + 3;
   const x0 = -Math.floor((n - 1) / 2);
   const lines = Array.from({ length: n }, (_, j) => ({ x: x0 + j, y: yLine }));
+  const region: Cell[] = [];
+  for (let x = box.x0 - 3; x <= box.x1 + 3; x++)
+    for (let y = box.y0 - 1; y < yLine; y++) if (x < box.x0 || x > box.x1 || y < box.y0 || y > box.y1) region.push({ x, y });
   const rA = (j: number) => tt(at0('read'), at0(`r${j}`));
-  let lineDelay = Math.max(...lines.map((l, j) => rA(j) + tt(at0(`r${j}`), l)));
-  for (;; lineDelay++) {
-    const trial = new Map(cells);
-    const relays: string[][] = [];
-    const busy = (c: Cell) => [...trial.values()].some((q) => q.x === c.x && q.y === c.y) || lines.some((l) => l.x === c.x && l.y === c.y);
-    const ok = lines.every((l, j) => {
-      const R = at0(`r${j}`);
-      const path = findDelay(R, l, lineDelay - rA(j), { x: Math.round((R.x + l.x) / 2), y: Math.round((R.y + l.y) / 2) }, busy);
-      if (!path) return false;
-      relays.push(path.map((c, k) => (trial.set(`d${j}.${k}`, c), `d${j}.${k}`)));
-      return true;
+  for (let lineDelay = Math.max(atLeast, ...lines.map((l, j) => rA(j) + tt(at0(`r${j}`), l))); ; lineDelay++) {
+    const used = new Set<string>();
+    const paths = lines.map((l, j) => {
+      const path = relayPath(at0(`r${j}`), l, lineDelay - rA(j), region.filter((c) => !used.has(ck(c))));
+      path?.forEach((c) => used.add(ck(c)));
+      return path;
     });
-    if (!ok) continue;
-    lines.forEach((l, j) => trial.set(`l${j}`, l));
-    return { cells: trial, lineRelays: relays, lineDelay };
+    if (paths.some((q) => !q)) continue;
+    L.lineRelays = paths.map((q, j) => q!.map((c, k) => (cells.set(`d${j}.${k}`, c), `d${j}.${k}`)));
+    lines.forEach((l, j) => cells.set(`l${j}`, l));
+    return lineDelay;
   }
+}
+
+/**
+ * Cells of one or two relays leading from `a` to `z` in exactly `ticks`,
+ * from `free`, staying as close as possible to the straight line a-z.
+ */
+function relayPath(a: Cell, z: Cell, ticks: number, free: Cell[]): Cell[] | undefined {
+  const off = (c: Cell) => {
+    const [dx, dy] = [z.x - a.x, z.y - a.y];
+    const t = Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.y - a.y) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(c.x - a.x - t * dx, c.y - a.y - t * dy);
+  };
+  let best: Cell[] | undefined;
+  let bestScore = Infinity;
+  for (const c of free) if (tt(a, c) + tt(c, z) === ticks && off(c) < bestScore) [best, bestScore] = [[c], off(c)];
+  if (best) return best;
+  for (const c of free) {
+    const rest = ticks - tt(a, c);
+    if (rest <= 0) continue;
+    for (const d of free) {
+      if (d === c || tt(c, d) + tt(d, z) !== rest) continue;
+      const score = off(c) + off(d);
+      if (score < bestScore) [best, bestScore] = [[c, d], score];
+    }
+  }
+  return best;
 }
 
 /** Arrivals on R_j caused by any move (tokens from F_{j-1}, B_{j+1}; clears via IF_j, IB_j). */
@@ -237,7 +283,6 @@ export function arrivalsOnR(n: number, cells: Map<string, Cell>, j: number): num
 
 interface RingTiming {
   readLag: number;
-  lineDelay: number;
   settle: number;
   minF: number;
 }
@@ -290,5 +335,5 @@ export function ringTiming(n: number, L: RingLayout): RingTiming {
     if (restore < minus) throw new Error(`ring: restore of r${j} lands before the read -1`);
     minF = Math.max(minF, readLag + Math.max(minus, restore) - Math.min(...S[j]!) + 1);
   }
-  return { readLag, lineDelay: L.lineDelay, settle, minF };
+  return { readLag, settle, minF };
 }
