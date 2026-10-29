@@ -2,6 +2,7 @@ import { ARITHMETIC_EXAMPLES } from './arithmetic';
 import { BASICS_EXAMPLES } from './basics';
 import { CALCULATOR_EXAMPLES } from './calculator';
 import { CLASSIC_EXAMPLES } from './classics';
+import { SNAKE_EXAMPLES } from './snake';
 import { TIME_MUSIC_EXAMPLES } from './time-music';
 import { EXAMPLE_CATEGORIES, type Example } from './types';
 
@@ -15,6 +16,7 @@ export const EXAMPLES: Example[] = [
   ...ARITHMETIC_EXAMPLES,
   ...TIME_MUSIC_EXAMPLES,
   ...CLASSIC_EXAMPLES,
+  ...SNAKE_EXAMPLES,
 ].sort((a, b) => EXAMPLE_CATEGORIES.indexOf(a.category) - EXAMPLE_CATEGORIES.indexOf(b.category));
 
 export function findExample(id: string): Example | undefined {

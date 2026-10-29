@@ -172,7 +172,7 @@ export class App implements BoardHost {
     if (request) clearHash();
     initial ??= readAutosave();
     if (!initial) {
-      const example = EXAMPLES[0]!;
+      const example = findExample('snake') ?? EXAMPLES[0]!;
       initial = { network: example.network, doc: { title: example.title, exampleId: example.id }, example };
     }
 
