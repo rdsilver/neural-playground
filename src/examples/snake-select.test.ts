@@ -212,3 +212,100 @@ describe('select timing is tight', () => {
     expect(1 + sel.powerLead + Math.min(s.holdStart[0], s.columnPulse[0] - s.skew[1])).toBe(last + 1);
   });
 });
+
+/** Does segment a-b come within the rectangle [x0, x1] x [y0, y1]? (Liang-Barsky clipping.) */
+function hitsRect(a: { x: number; y: number }, b: { x: number; y: number }, r: { x0: number; x1: number; y0: number; y1: number }): boolean {
+  let [t0, t1] = [0, 1];
+  const [dx, dy] = [b.x - a.x, b.y - a.y];
+  for (const [p, q] of [[-dx, a.x - r.x0], [dx, r.x1 - a.x], [-dy, a.y - r.y0], [dy, r.y1 - a.y]] as const) {
+    if (p === 0) {
+      if (q < 0) return false;
+    } else {
+      const t = q / p;
+      if (p < 0) t0 = Math.max(t0, t);
+      else t1 = Math.min(t1, t);
+    }
+  }
+  return t0 <= t1;
+}
+
+describe('select geometry', () => {
+  // Head plane below the screen, tail plane above it (mirrored), as intended.
+  const b = new NetworkBuilder();
+  const lamps = buildLamps(b, SCREEN, { w: W, h: H, prefix: 'px' });
+  const head = buildSelect(b, HEAD, { w: W, h: H, polarity: 1, prefix: 'hd', lamps });
+  const tail = buildSelect(b, TAIL, { w: W, h: H, polarity: -1, prefix: 'tl', lamps });
+  const net = b.build();
+  const cell = new Map(net.neurons.map((n) => [n.id, n] as const));
+  const screen = { x0: SCREEN.x0 - 0.5, x1: SCREEN.x0 + W - 0.5, y0: SCREEN.y0 - 0.5, y1: SCREEN.y0 + H - 0.5 };
+
+  it('lamps form a contiguous rectangle at pitch 1, lamps[y][x] at (x, y)', () => {
+    lamps.forEach((r, y) => r.forEach((id, x) => expect([cell.get(id)!.x, cell.get(id)!.y, cell.get(id)!.kind]).toEqual([SCREEN.x0 + x, SCREEN.y0 + y, 'lamp'])));
+  });
+
+  it('only wires that end at a lamp cross the screen', () => {
+    const lampIds = new Set(lamps.flat());
+    const crossing = net.connections.filter((c) => !lampIds.has(c.to) && hitsRect(cell.get(c.from)!, cell.get(c.to)!, screen));
+    expect(crossing).toEqual([]);
+    // Each lamp is driven by exactly its two Qs (head +1, tail -1) and nothing else.
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) expect(net.connections.filter((c) => c.to === lamps[y]![x]).map((c) => c.from).sort()).toEqual([head.select[y]![x]!, tail.select[y]![x]!].sort());
+  });
+
+  it.each([['head', head], ['tail', tail]] as const)('%s plane: inputs in order along straight lines at pitch 1, everything on its side of the screen', (_, sel) => {
+    for (const ids of [sel.cols, sel.rows]) {
+      const c = ids.map((id) => cell.get(id)!);
+      const dir = Math.sign(c[1]!.x - c[0]!.x); // in order, one way or the other (the tail's rows run mirrored)
+      c.forEach((q, k) => expect([q.x - c[0]!.x, q.y]).toEqual([dir * k + 0, c[0]!.y]));
+    }
+    const prefix = sel.cols[0]!.split('-')[0]!;
+    const ys = net.neurons.filter((n) => n.id.startsWith(`${prefix}-`)).map((n) => n.y);
+    if (sel === head) expect(Math.min(...ys)).toBe(SCREEN.y0 + H);
+    else expect(Math.max(...ys)).toBe(SCREEN.y0 - 1);
+    // Column inputs sit right under the screen's columns.
+    sel.cols.forEach((id, x) => expect(cell.get(id)!.x).toBe(SCREEN.x0 + x));
+  });
+});
+
+describe('select mutation test', () => {
+  it.each([1, -1] as const)('polarity %i: removing any one connection, or raising any one threshold, breaks an invariant', (p) => {
+    const u = unit(p);
+    const { sel, net } = u;
+    const prefix = `${p === 1 ? 'hd' : 'tl'}-`;
+    const out = new Map<string, string[]>();
+    for (const c of net.connections) out.set(c.from, [...(out.get(c.from) ?? []), c.to]);
+    const qPixel = new Map(sel.select.flatMap((r, y) => r.map((q, x) => [q, [x, y] as [number, number]] as const)));
+    /** The pixel a neuron serves: itself (Q, lamp), or the first Q its pulses reach. */
+    const pixelOf = (id: string): [number, number] => {
+      if (id.startsWith('px-')) return id.slice(3).split('.').map(Number) as [number, number];
+      const seen = new Set([id]);
+      for (let front = [id]; front.length; front = front.flatMap((n) => out.get(n) ?? []).filter((n) => !seen.has(n) && (seen.add(n), true)))
+        for (const n of front) if (qPixel.has(n)) return qPixel.get(n)!;
+      throw new Error(`no pixel for ${id}`);
+    };
+    /** A short scenario around a pixel: selected at both window edges, then its row and its column half-selected. */
+    const scenario = ([x, y]: [number, number]): Frame[] => {
+      const mid = Math.round((sel.skew.min + sel.skew.max) / 2);
+      return [{ x, y, s: sel.skew.min }, { x, y, s: sel.skew.max }, { x: (x + 5) % W, y, s: mid }, { x, y: (y + 4) % H, s: mid }];
+    };
+    expect(run(u, 480, scenario([3, 5]))).toBeUndefined(); // the unmutated plane passes
+    const survivors: string[] = [];
+    let mutants = 0;
+    net.connections.forEach((c, n) => {
+      if (!c.from.startsWith(prefix)) return;
+      mutants++;
+      const m: Network = { ...net, connections: net.connections.filter((_, k) => k !== n) };
+      if (!run(u, 480, scenario(pixelOf(c.to)), m)) survivors.push(`${c.from} -> ${c.to}`);
+    });
+    const own = net.neurons.filter((q) => q.id.startsWith(prefix));
+    // Every threshold of the block is 1, and the engine treats threshold 0 as 1: lowering one changes nothing, so only +1 is tried.
+    expect(new Set(own.map((q) => q.threshold))).toEqual(new Set([1]));
+    for (const q of own) {
+      mutants++;
+      const m: Network = { ...net, neurons: net.neurons.map((r) => (r.id === q.id ? { ...r, threshold: r.threshold + 1 } : r)) };
+      if (!run(u, 480, scenario(pixelOf(q.id)), m)) survivors.push(`${q.id} threshold 2`);
+    }
+    expect(survivors).toEqual([]);
+    expect(mutants).toBe(678 + 281); // every connection of the block (lamp wires included) and every neuron
+  });
+});
