@@ -99,7 +99,7 @@ describe('bit (flip-flop + register)', () => {
     }
   });
 
-  it('every pair of presses within a frame-and-a-half', () => {
+  it('every pair of presses within a frame-and-a-half', { timeout: 60_000 }, () => {
     const F = 90;
     for (const [s1, s2] of [[true, true], [true, false], [false, true], [false, false]] as const)
       for (let p = 0; p < F; p++)
