@@ -139,14 +139,16 @@ function rowCells(L: Layout, y1: number): Cell[] {
   return out;
 }
 
-/**
- * One relay per half row, chosen from `cands` (distinct cells), fed by
- * `from(j, side)` (a cell and the tick it fires): every pulse it sends must
- * land on its half's Qs as close as possible to one common tick T, scanned
- * over [T0, T1]. Hardest halves pick first. Returns T and the worst miss.
- */
-function assignRelays(L: Layout, role: string, from: (j: number, side: number) => { cell: Cell; t: number }, cands: Cell[], T0: number, T1: number) {
-  const halves: Array<{ j: number; side: number; opts: Array<{ c: Cell; lo: number; hi: number }> }> = [];
+interface HalfOptions {
+  j: number;
+  side: number;
+  /** For each candidate cell: earliest and latest arrival on the half's Qs. */
+  opts: Array<{ c: Cell; lo: number; hi: number }>;
+}
+
+/** Arrival ranges on each half row, for a relay at each candidate cell fed by from(j, side) (a cell and its fire tick). */
+function relayOptions(L: Layout, from: (j: number, side: number) => { cell: Cell; t: number }, cands: Cell[]): HalfOptions[] {
+  const halves: HalfOptions[] = [];
   for (let j = 0; j < L.h; j++)
     for (const side of [0, 1]) {
       const { cell: src, t } = from(j, side);
@@ -156,7 +158,18 @@ function assignRelays(L: Layout, role: string, from: (j: number, side: number) =
         return { c, lo: Math.min(...arr), hi: Math.max(...arr) };
       }) });
     }
-  const dev = (o: { lo: number; hi: number }, T: number) => Math.max(T - o.lo, o.hi - T);
+  return halves;
+}
+
+const dev = (o: { lo: number; hi: number }, T: number) => Math.max(T - o.lo, o.hi - T);
+
+/**
+ * One relay per half row, on distinct cells, so that every pulse lands as
+ * close as possible to one common tick: the earliest T in [T0, T1] whose worst
+ * miss is within 4 ticks of the best. Hardest halves pick first; ties go to
+ * cells nearer the plane. Sets the cells `${role}${j}.${side}`; returns T.
+ */
+function pickRelays(L: Layout, role: string, halves: HalfOptions[], T0: number, T1: number): number {
   // Coarse: the best T ignoring that relays need distinct cells.
   let T = T0;
   let dFree = Infinity;
@@ -164,26 +177,32 @@ function assignRelays(L: Layout, role: string, from: (j: number, side: number) =
     const d = Math.max(...halves.map((hv) => Math.min(...hv.opts.map((o) => dev(o, t)))));
     if (d < dFree) [T, dFree] = [t, d];
   }
-  // Fine: distinct cells, hardest halves first; the earliest T within 4 ticks of the best miss.
   const tries: Array<{ T: number; d: number; picks: Cell[] }> = [];
   for (let t = Math.max(T0, T - 30); t <= Math.min(T1, T + 30); t++) {
-    const ranked = halves.map((hv) => [...hv.opts].sort((p, q) => dev(p, t) - dev(q, t) || p.c.y - q.c.y || p.c.x - q.c.x));
-    const order = ranked.map((_, n) => n).sort((p, q) => dev(ranked[q]![0]!, t) - dev(ranked[p]![0]!, t) || p - q);
+    // Each half's options within reach of its best, best first (all of them if needed).
+    const ranked = halves.map((hv) => {
+      const best = Math.min(...hv.opts.map((o) => dev(o, t)));
+      const near = hv.opts.filter((o) => dev(o, t) <= best + 24);
+      const sort = (v: HalfOptions['opts']) => v.map((o) => ({ o, d: dev(o, t) })).sort((p, q) => p.d - q.d || p.o.c.y - q.o.c.y || p.o.c.x - q.o.c.x);
+      return { near: sort(near), all: () => sort(hv.opts) };
+    });
+    const order = ranked.map((_, n) => n).sort((p, q) => ranked[q]!.near[0]!.d - ranked[p]!.near[0]!.d || p - q);
     const taken = new Set<string>();
     const picks: Cell[] = [];
     let d = 0;
     for (const n of order) {
-      const o = ranked[n]!.find((x) => !taken.has(key(x.c)))!;
-      taken.add(key(o.c));
-      picks[n] = o.c;
-      d = Math.max(d, dev(o, t));
+      const free = (v: Array<{ o: { c: Cell }; d: number }>) => v.find((x) => !taken.has(key(x.o.c)));
+      const o = free(ranked[n]!.near) ?? free(ranked[n]!.all())!;
+      taken.add(key(o.o.c));
+      picks[n] = o.o.c;
+      d = Math.max(d, o.d);
     }
     tries.push({ T: t, d, picks });
   }
   const dMin = Math.min(...tries.map((x) => x.d));
   const best = tries.find((x) => x.d <= dMin + 4)!;
   halves.forEach((hv, n) => L.cells.set(`${role}${hv.j}.${hv.side}`, best.picks[n]!));
-  return best;
+  return best.T;
 }
 
 /** Row inputs and the row-half relays S (hold start, +1). Returns the common hold-start tick. */
@@ -192,19 +211,22 @@ function addRowInputs(L: Layout): number {
   const yR = h + 1 + ROW_LINE_DROP;
   for (let j = 0; j < h; j++) cells.set(`r${j}`, { x: Math.floor(w / 2) + Math.floor((w - h) / 2) + j, y: yR });
   const from = (j: number) => ({ cell: cells.get(`r${j}`)!, t: 0 });
-  const cands = rowCells(L, yR + 8);
-  return assignRelays(L, 's', from, cands, 0, 900).T;
+  return pickRelays(L, 's', relayOptions(L, from, rowCells(L, yR + 8)), 0, 900);
 }
 
-/** Row-half Inhibitors Z (hold end, -1), fed by S, aimed at tick `T`. */
-function addRowInhibitors(L: Layout, T: number): void {
-  for (const role of [...L.cells.keys()]) if (role.startsWith('z') || role === 'power') L.cells.delete(role);
+/** Options for the row-half Inhibitors Z (hold end, -1), fed by S. */
+function inhibitorOptions(L: Layout): HalfOptions[] {
   const from = (j: number, side: number) => {
     const s = L.cells.get(`s${j}.${side}`)!;
     return { cell: s, t: tt(L.cells.get(`r${j}`)!, s) };
   };
-  assignRelays(L, 'z', from, rowCells(L, L.h + ROW_LINE_DROP + 24), T, T);
-  // Power-on digs every Q's hole (-1) by firing the row Inhibitors once.
+  return relayOptions(L, from, rowCells(L, L.h + ROW_LINE_DROP + 24));
+}
+
+/** Places the Z (aimed at tick T) and the power-on relay, which digs every Q's hole by firing all Z once. */
+function addRowInhibitors(L: Layout, opts: HalfOptions[], T: number): void {
+  for (const role of [...L.cells.keys()]) if (role.startsWith('z') || role === 'power') L.cells.delete(role);
+  pickRelays(L, 'z', opts, T, T);
   const r0 = L.cells.get('r0')!;
   const used = new Set([...L.cells.values()].map(key));
   let x = r0.x - 2;
@@ -318,9 +340,10 @@ function getLayout(w: number, h: number, polarity: 1 | -1) {
   if (!layouts.has(id)) {
     const L = selectLayout(w, h, polarity);
     const B = addRowInputs(L);
+    const zOpts = inhibitorOptions(L);
     for (let hold = 300; ; hold -= 2) {
       if (hold < 60) throw new Error('select layout: no hold length fits MAX_MIN_F');
-      addRowInhibitors(L, B + hold);
+      addRowInhibitors(L, zOpts, B + hold);
       const T = selectTiming(L);
       if (T.minF <= MAX_MIN_F) {
         layouts.set(id, { L, T });
