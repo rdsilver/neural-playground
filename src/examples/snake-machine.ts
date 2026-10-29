@@ -76,12 +76,12 @@ const tt = (a: Cell, b: Cell) => travelTicks(a, b);
 export const LAYOUT = {
   screen: { x0: 20, y0: 30, sx: 1 } as Place,
   headSelect: { x0: 15, y0: 39, sx: 1, sy: 1 } as Place,
-  tailSelect: { x0: 15, y0: 28, sx: 1, sy: -1 } as Place,
+  tailSelect: { x0: 15, y0: 25, sx: 1, sy: -1 } as Place,
   /** Ring placements: the read source's cell; transposed, so each line row is a column facing the plane. */
   headX: { x0: 1, y0: 59, sx: 1, sy: -1 } as Place,
   headY: { x0: 1, y0: 45, sx: 1, sy: 1 } as Place,
-  tailX: { x0: 1, y0: 8, sx: 1, sy: 1 } as Place,
-  tailY: { x0: 1, y0: 23, sx: 1, sy: 1 } as Place,
+  tailX: { x0: 1, y0: 5, sx: 1, sy: 1 } as Place,
+  tailY: { x0: 1, y0: 20, sx: 1, sy: 1 } as Place,
   /** The control unit's top key. */
   control: { x: 9, y: 30 } as Cell,
   queue: { x0: 1, y0: 30, sx: 1, sy: -1 } as Place,
@@ -618,15 +618,15 @@ const span = (v: number[]): [number, number] => [Math.min(...v), Math.max(...v)]
  *   event                                            head          tail
  *   strobe fires (one of R/L/D/U)                    178
  *   queue: shift; inputs; outputs; ANY               160; 259-326; 194; 243
- *   Y ring moves (fwd or back), reads, line fires    414, 496, 757  418, 500, 761
- *   X ring moves, reads, line fires                  636, 714, 1021 670, 748, 1055
- *   plane rows fire                                  1012-1052     1037-1065
- *   plane columns fire                               1287-1320     1321-1354
- *   row - column skew (the plane's window)           -308..-235    -317..-256
+ *   Y ring moves (fwd or back), reads, line fires    414, 496, 757  447, 529, 790
+ *   X ring moves, reads, line fires                  636, 714, 1021 700, 778, 1085
+ *   plane rows fire                                  1012-1052     1066-1094
+ *   plane columns fire                               1287-1320     1351-1384
+ *   row - column skew (the plane's window)           -308..-235    -318..-257
  *                                                    (-323..-180)  (-318..-173)
- *   the pixel's Q fires                              1410-1472     1443-1507
- *   lamp pulse lands (+1 head, -1 tail)              1546-1620     1580-1655
- *   settled: every lamp pulse of frame k landed      1655 = settledTick(k) - frameTick(k)
+ *   the pixel's Q fires                              1410-1472     1473-1537
+ *   lamp pulse lands (+1 head, -1 tail)              1546-1620     1655-1727
+ *   settled: every lamp pulse of frame k landed      1727 = settledTick(k) - frameTick(k)
  *     (frame k + 1's first lands at 480 + 1546)
  *
  * Latency (ticks, to the head lamp's +1): strobe to lamp 1368..1442; key

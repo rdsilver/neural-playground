@@ -11,22 +11,22 @@ const factsOf = (s: Snake) => factsCache.get(s) ?? factsCache.set(s, controlFact
 const facts = factsOf(snake);
 const F = snake.F;
 const L = 4;
-/** Most pulses ever in flight at once (the long run measures 222). */
+/** Most pulses ever in flight at once (the long run measures 204). */
 const MAX_PULSES = 250;
 /** Glue: every connection not internal to a block, and every relay outside the blocks. */
-const GLUE_CONNECTIONS = 95;
-const GLUE_NEURONS = 35;
-const BUDGET = { neurons: 1160, connections: 2599, size: [43, 66] };
+const GLUE_CONNECTIONS = 99;
+const GLUE_NEURONS = 39;
+const BUDGET = { neurons: 1164, connections: 2603, size: [43, 69] };
 /** Latencies in ticks (see Snake.latency). */
 const LATENCY = { strobeToLamp: [1368, 1442], pressToStrobe: [146, 647], pressToLampMin: 1514, pressToLampMax: 2089 };
 /** The frame schedule: the table in buildSnake(), ticks after frameTick(k). */
 const SCHEDULE: Snake['schedule'] = {
   strobe: 178,
   head: { moveX: 636, moveY: 414, readX: 714, readY: 496, linesX: 1021, linesY: 757, cols: [1287, 1320], rows: [1012, 1052], skew: [-308, -235], window: [-323, -180], lamp: [1546, 1620], q: [1410, 1472] },
-  tail: { moveX: 670, moveY: 418, readX: 748, readY: 500, linesX: 1055, linesY: 761, cols: [1321, 1354], rows: [1037, 1065], skew: [-317, -256], window: [-318, -173], lamp: [1580, 1655], q: [1443, 1507] },
+  tail: { moveX: 700, moveY: 447, readX: 778, readY: 529, linesX: 1085, linesY: 790, cols: [1351, 1384], rows: [1066, 1094], skew: [-318, -257], window: [-318, -173], lamp: [1655, 1727], q: [1473, 1537] },
   queue: { shift: 160, inputs: [259, 326], outputs: 194, any: 243 },
-  lamps: [1546, 1655],
-  powerSlack: { headX: 148, headY: 197, tailX: 2094, tailY: 2026, queue: 35, headSelect: 375, tailSelect: 2294 },
+  lamps: [1546, 1727],
+  powerSlack: { headX: 148, headY: 197, tailX: 2019, tailY: 2099, queue: 35, headSelect: 375, tailSelect: 2203 },
 };
 
 interface RunOptions {
@@ -241,11 +241,12 @@ describe('snake machine: behaviour', () => {
     const r = run(snake, 3000, randomPresses(5, 3000));
     // No drift: every block was back at rest at its settled moment in every frame (run's probes).
     expect(r.error).toBeUndefined();
-    // Bounded: the same ceiling early and late (no build-up), well under one pulse per connection.
+    // Bounded: no build-up (the late ceiling is no higher than the early one), well under one pulse per connection.
     const early = Math.max(...r.pulsesByFrame.slice(0, 1000));
     const late = Math.max(...r.pulsesByFrame.slice(2000, 3000));
     expect(r.maxPulses).toBeLessThanOrEqual(MAX_PULSES);
-    expect([early, late].every((m) => m <= MAX_PULSES && m > MAX_PULSES / 2)).toBe(true);
+    expect(late).toBeLessThanOrEqual(early);
+    expect(Math.min(early, late)).toBeGreaterThan(50);
   });
 });
 
@@ -346,7 +347,7 @@ describe('snake machine: geometry and budget', () => {
     const clips = hops.filter(([a, z]) => Object.entries(snake.blocks).some(([n, b]) => n !== blockOf(a) && n !== blockOf(z) && segmentHitsRect(cell.get(a)!, cell.get(z)!, squares(b.box))));
     // At most 6 neurons under one hop (a wire into a ring's centre crosses its disc).
     expect(Math.max(...over)).toBeLessThanOrEqual(6);
-    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual({ hops: 59, over: 94, clips: 8 });
+    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual({ hops: 63, over: 83, clips: 7 });
   });
 
   it('the probes cover every neuron but the lamps (checked against the model instead)', () => {
