@@ -604,11 +604,13 @@ const span = (v: number[]): [number, number] => [Math.min(...v), Math.max(...v)]
  * takes -1 from the lamp the tail leaves. Frames 0..3 have no queue output, so
  * the snake grows 1, 2, 3, 4 pixels, then stays 4 long.
  *
- * Timing is solved from the cells (Glue.movesFor): each X ring moves just
- * late enough that its plane's every row fires inside the skew window before
- * every column; every line is an exact relay delay. assemble() checks every
- * contract (skew windows, read lags, queue tolerance, power leads, settled
- * windows) and throws on a violation.
+ * Timing is solved from the cells (Glue.movesFor): each X ring moves as
+ * early as its wiring allows, and its Y ring so that every row fires inside
+ * the plane's skew window before every column; fwd and back of a ring are
+ * reached on the same tick, and every read lands exactly readLag after the
+ * move, through exact relay delays. assemble() checks every contract (skew
+ * windows, queue tolerance, power leads, rest and settled windows) and
+ * throws on a violation.
  *
  * Frame schedule, ticks after frameTick(k). The tail columns replay the move
  * of frame k - 4. Asserted by snake-machine.test.ts (SCHEDULE).
@@ -649,8 +651,9 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   /** Offsets of the row (or column) fires after the ring's move, per position. */
   const fires = (ring: Ring, inputs: string[]) => ring.lines.map((l, j) => ring.readLag + ring.lineDelay[j]! + glue.ticks(l, inputs[j]!));
 
-  // Head: the X ring moves as early as its cheapest wiring allows; the Y
-  // ring so that every row fires mid-window before every column.
+  // Head: the X ring moves as early as its cheapest wiring allows; the Y ring
+  // as near its own wiring's travel as the plane's skew window allows (every
+  // row fires inside the window, before every column).
   const [hX, hY] = glue.movesFor(
     [[st.right, hx.fwd, 'g-hx-fwd'], [st.left, hx.back, 'g-hx-back']],
     [[st.down, hy.fwd, 'g-hy-fwd'], [st.up, hy.back, 'g-hy-back']],
@@ -659,7 +662,7 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   const headRows = fires(hy, hs.rows).map((r) => hY + r);
   const headCols = fires(hx, hs.cols);
 
-  // Queue: each strobe feeds its lane; shift comes so that the earliest input is exactly on time.
+  // Queue: each strobe feeds its lane with a direct wire.
   const lanes = [st.right, st.left, st.down, st.up];
   lanes.forEach((s, l) => glue.wire(s, q.inputs[l]!));
   const inputs = lanes.map((s, l) => T0 + glue.ticks(s, q.inputs[l]!));
