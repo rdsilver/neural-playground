@@ -288,8 +288,9 @@ class Glue {
   pad(a: Cell, relays: Cell[], z: Cell, total: number, own: ReadonlySet<string>, avoid: ReadonlySet<string>, depth = 0): Cell[] | undefined {
     const pts = [a, ...relays, z];
     const T = pts.slice(1).reduce((s, q, i) => s + tt(pts[i]!, q), 0);
-    if (T === total) return relays;
+    // A route may run through a cell another line of the same bundle has taken since.
     if (T > total || relays.some((c) => avoid.has(cellKey(c)))) return undefined;
+    if (T === total) return relays;
     const used = new Set([...pts.map(cellKey), ...avoid]);
     const cost = (seq: Cell[]) => seq.slice(1).reduce((s, q, i) => s + this.hopCost(seq[i]!, q, own), 0);
     const base = cost(pts);
