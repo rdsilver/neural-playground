@@ -26,21 +26,33 @@ export interface Rect {
   y1: number;
 }
 
-/** Does segment a-b come within the rectangle (cell centres, inclusive)? Liang-Barsky clipping. */
-export function segmentHitsRect(a: Cell, b: Cell, r: Rect): boolean {
+/** The part [t0, t1] of segment a-b (as fractions of it) inside rectangle r; empty when t0 > t1 (Liang-Barsky). */
+function clip(a: Cell, b: Cell, r: Rect): [number, number] {
   let [t0, t1] = [0, 1];
   const [dx, dy] = [b.x - a.x, b.y - a.y];
   for (const [p, q] of [[-dx, a.x - r.x0], [dx, r.x1 - a.x], [-dy, a.y - r.y0], [dy, r.y1 - a.y]] as const) {
     if (p === 0) {
-      if (q < 0) return false;
+      if (q < 0) return [1, 0];
     } else {
       const t = q / p;
       if (p < 0) t0 = Math.max(t0, t);
       else t1 = Math.min(t1, t);
     }
   }
+  return [t0, t1];
+}
+
+/** Does segment a-b touch the rectangle? */
+export function segmentHitsRect(a: Cell, b: Cell, r: Rect): boolean {
+  const [t0, t1] = clip(a, b, r);
   return t0 <= t1;
 }
+
+/** Fraction of segment a-b inside the rectangle. */
+const clipFraction = (a: Cell, b: Cell, r: Rect) => {
+  const [t0, t1] = clip(a, b, r);
+  return Math.max(0, t1 - t0);
+};
 
 /** Distance from point p to segment a-b. */
 export function segmentDistance(a: Cell, b: Cell, p: Cell): number {
@@ -50,52 +62,6 @@ export function segmentDistance(a: Cell, b: Cell, p: Cell): number {
 }
 
 const tt = (a: Cell, b: Cell) => travelTicks(a, b);
-
-/**
- * A delay line from a to z of exactly `total` ticks through at most
- * `maxRelays` relays chosen from `cands`; each hop must pass `ok`. Among the
- * lines with the fewest relays the shortest wiring wins. Deterministic. Like
- * findDelay (snake-control.ts), with a caller-chosen region, hop check and
- * hop cost (default: length).
- */
-export function searchDelay(a: Cell, z: Cell, total: number, cands: Cell[], ok: (p: Cell, q: Cell) => boolean, maxRelays = 4, cost?: (p: Cell, q: Cell) => number): Cell[] | undefined {
-  if (tt(a, z) === total && ok(a, z)) return [];
-  const dist = cost ?? ((p: Cell, q: Cell) => Math.hypot(p.x - q.x, p.y - q.y));
-  type Entry = { path: number[]; len: number };
-  // layer[i]: ticks from a -> best path ending at cands[i]
-  let layer = cands.map((c) => {
-    const m = new Map<number, Entry>();
-    const t = tt(a, c);
-    if (ok(a, c) && t + tt(c, z) <= total) m.set(t, { path: [], len: dist(a, c) });
-    return m;
-  });
-  for (let hops = 1; hops <= maxRelays; hops++) {
-    let best: { path: number[]; len: number } | undefined;
-    layer.forEach((m, i) => {
-      const c = cands[i]!;
-      const e = m.get(total - tt(c, z));
-      if (e && ok(c, z) && (!best || e.len + dist(c, z) < best.len)) best = { path: [...e.path, i], len: e.len + dist(c, z) };
-    });
-    if (best) return best.path.map((i) => cands[i]!);
-    if (hops === maxRelays) break;
-    const next = cands.map(() => new Map<number, Entry>());
-    layer.forEach((m, i) => {
-      const c = cands[i]!;
-      m.forEach((e, t0) =>
-        cands.forEach((d, j) => {
-          if (j === i || e.path.includes(j)) return;
-          const t = t0 + tt(c, d);
-          if (t + tt(d, z) > total || !ok(c, d)) return;
-          const len = e.len + dist(c, d);
-          const old = next[j]!.get(t);
-          if (!old || len < old.len) next[j]!.set(t, { path: [...e.path, i], len });
-        }),
-      );
-    });
-    layer = next;
-  }
-  return undefined;
-}
 
 // ---- placement -------------------------------------------------------------------
 
@@ -112,12 +78,12 @@ export const LAYOUT = {
   headSelect: { x0: 15, y0: 39, sx: 1, sy: 1 } as Place,
   tailSelect: { x0: 15, y0: 28, sx: 1, sy: -1 } as Place,
   /** Ring placements: the read source's cell; transposed, so each line row is a column facing the plane. */
-  headX: { x0: 1, y0: 60, sx: 1, sy: -1 } as Place,
+  headX: { x0: 1, y0: 59, sx: 1, sy: -1 } as Place,
   headY: { x0: 1, y0: 45, sx: 1, sy: 1 } as Place,
-  tailX: { x0: 1, y0: 7, sx: 1, sy: 1 } as Place,
-  tailY: { x0: 1, y0: 21, sx: 1, sy: 1 } as Place,
+  tailX: { x0: 1, y0: 8, sx: 1, sy: 1 } as Place,
+  tailY: { x0: 1, y0: 23, sx: 1, sy: 1 } as Place,
   /** The control unit's top key. */
-  control: { x: 9, y: 29 } as Cell,
+  control: { x: 9, y: 30 } as Cell,
   queue: { x0: 1, y0: 30, sx: 1, sy: -1 } as Place,
 };
 
@@ -158,14 +124,6 @@ function blocksOf(net: Network): Record<BlockName, Block> {
   return out;
 }
 
-/** Only the blocks, for looking at the layout. */
-export function buildBlocksOnly(F = 480, start: Cell = { x: 0, y: 3 }) {
-  const b = new NetworkBuilder();
-  const parts = placeBlocks(b, F, start);
-  const network = b.build();
-  return { b, network, parts, blocks: blocksOf(network) };
-}
-
 // ---- glue ------------------------------------------------------------------------
 
 const cellKey = (c: Cell) => `${c.x},${c.y}`;
@@ -175,6 +133,8 @@ const inRect = (c: Cell, r: Rect) => c.x >= r.x0 && c.x <= r.x1 && c.y >= r.y0 &
 
 /** Longest glue hop, in cells. */
 const MAX_HOP = 9;
+/** Where glue relays may go: the corridors left of the rings and between the rings and the planes (rows of the planes). */
+const GLUE_AREA: Rect = { x0: -7, y0: 1, x1: 13, y1: 66 };
 /** Route cost of one relay (in cells of wire). */
 const RELAY_COST = 3;
 
@@ -223,9 +183,9 @@ class Glue {
     return (Object.keys(PREFIX) as BlockName[]).find((n) => id.startsWith(PREFIX[n]));
   }
 
-  /** Free for a relay: empty, off the screen and its margin, outside every block. */
+  /** Free for a relay: in the glue area, empty, off the screen and its margin, outside every block. */
   free(c: Cell): boolean {
-    return !this.occupied.has(cellKey(c)) && !inRect(c, this.bezel) && !Object.values(this.boxes).some((r) => inRect(c, r));
+    return inRect(c, GLUE_AREA) && !this.occupied.has(cellKey(c)) && !inRect(c, this.bezel) && !Object.values(this.boxes).some((r) => inRect(c, r));
   }
 
   /** A hop may not cross the screen or its margin (their cells' squares). */
@@ -521,22 +481,6 @@ class Glue {
   }
 }
 
-/** Fraction of segment p-q inside rectangle r (Liang-Barsky). */
-function clipFraction(p: Cell, q: Cell, r: Rect): number {
-  let [t0, t1] = [0, 1];
-  const [dx, dy] = [q.x - p.x, q.y - p.y];
-  for (const [a, b] of [[-dx, p.x - r.x0], [dx, r.x1 - p.x], [-dy, p.y - r.y0], [dy, r.y1 - p.y]] as const) {
-    if (a === 0) {
-      if (b < 0) return 0;
-    } else {
-      const t = b / a;
-      if (a < 0) t0 = Math.max(t0, t);
-      else t1 = Math.min(t1, t);
-    }
-  }
-  return Math.max(0, t1 - t0);
-}
-
 // ---- the machine -------------------------------------------------------------------
 
 export interface SnakeOptions {
@@ -569,8 +513,8 @@ export interface Snake {
   keys: Record<Direction, string>;
   /** lamps[y][x]. */
   lamps: string[][];
-  /** The lamp rectangle (cells). */
-  screen: Rect;
+  /** The lamp rectangle: top-left lamp cell, width and height (pitch 1). */
+  screen: { x0: number; y0: number; w: number; h: number };
   /** The screen plus its one-cell bezel margin: nothing but lamp wires may cross it. */
   bezel: Rect;
   blocks: Record<BlockName, Block>;
@@ -585,7 +529,12 @@ export interface Snake {
   settledTick(k: number): number;
   /** The frame schedule: offsets (ticks after frameTick(k)) of every event; see buildSnake(). */
   schedule: Schedule;
-  latency: { strobeToLamp: [number, number]; pressToLampMin: number; pressToLampMax: number };
+  /**
+   * Latencies in ticks, to the head lamp's +1 landing: from the strobe
+   * [min, max over pixels]; from a key press that turns the snake (any
+   * phase, any turn, any pixel; = pressToStrobe + strobeToLamp).
+   */
+  latency: { strobeToLamp: [number, number]; pressToStrobe: [number, number]; pressToLampMin: number; pressToLampMax: number };
   /** Probes for frame k: every neuron of every block at rest at that block's settled moment. */
   probes(k: number, state: FrameState): Probe[];
 }
@@ -607,6 +556,9 @@ export interface SideSchedule {
   moveY: number;
   readX: number;
   readY: number;
+  /** The ring's line fires (every position: default lines fire on one tick). */
+  linesX: number;
+  linesY: number;
   /** [min, max] over positions/wires. */
   cols: [number, number];
   rows: [number, number];
@@ -621,6 +573,47 @@ export interface SideSchedule {
 
 const span = (v: number[]): [number, number] => [Math.min(...v), Math.max(...v)];
 
+/**
+ * Build the Neural Snake (F = 480: 4 moves per second at speed 32).
+ *
+ * Signal flow, once per frame. The control unit's frame clock fires at
+ * frameTick(k) = 1 + kF; it samples the direction register and fires one
+ * strobe. The strobe moves a head ring (RIGHT/LEFT: X fwd/back, DOWN/UP: Y
+ * fwd/back) and enters the move queue in its own lane. The strobe clock K
+ * (which fires every frame, 15 ticks before the strobe) reads both head rings;
+ * their lines select one row and one column of the head plane, which adds +1
+ * to the head's lamp. The queue gives each move back L = 4 frames later to the
+ * tail rings, which ANY (fired by every queue output) reads; the tail plane
+ * takes -1 from the lamp the tail leaves. Frames 0..3 have no queue output, so
+ * the snake grows 1, 2, 3, 4 pixels, then stays 4 long.
+ *
+ * Timing is solved from the cells (Glue.movesFor): each X ring moves just
+ * late enough that its plane's every row fires inside the skew window before
+ * every column; every line is an exact relay delay. assemble() checks every
+ * contract (skew windows, read lags, queue tolerance, power leads, settled
+ * windows) and throws on a violation.
+ *
+ * Frame schedule, ticks after frameTick(k). The tail columns replay the move
+ * of frame k - 4. Asserted by snake-machine.test.ts (SCHEDULE).
+ *
+ *   event                                            head          tail
+ *   strobe fires (one of R/L/D/U)                    178
+ *   queue: shift; inputs; outputs; ANY               160; 259-326; 194; 243
+ *   Y ring moves (fwd or back), reads, line fires    414, 496, 757  418, 500, 761
+ *   X ring moves, reads, line fires                  636, 714, 1021 670, 748, 1055
+ *   plane rows fire                                  1012-1052     1037-1065
+ *   plane columns fire                               1287-1320     1321-1354
+ *   row - column skew (the plane's window)           -308..-235    -317..-256
+ *                                                    (-323..-180)  (-318..-173)
+ *   the pixel's Q fires                              1410-1472     1443-1507
+ *   lamp pulse lands (+1 head, -1 tail)              1546-1620     1580-1655
+ *   settled: every lamp pulse of frame k landed      1655 = settledTick(k) - frameTick(k)
+ *     (frame k + 1's first lands at 480 + 1546)
+ *
+ * Latency (ticks, to the head lamp's +1): strobe to lamp 1368..1442; key
+ * press to strobe 146..647 (any phase, any turn); press to lamp 1514..2089
+ * (about 0.8 to 1.1 s at speed 32).
+ */
 export function buildSnake(opts: SnakeOptions = {}): Snake {
   const F = opts.F ?? 480;
   const start = opts.start ?? { x: 0, y: 3 };
@@ -628,8 +621,7 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   const parts = placeBlocks(b, F, start);
   const { control: ctl, headX: hx, headY: hy, tailX: tx, tailY: ty, headSelect: hs, tailSelect: ts, queue: q } = parts;
   const s0 = LAYOUT.screen;
-  const screen: Rect = { x0: s0.x0, y0: s0.y0, x1: s0.x0 + W - 1, y1: s0.y0 + H - 1 };
-  const bezel: Rect = { x0: screen.x0 - 1, y0: screen.y0 - 1, x1: screen.x1 + 1, y1: screen.y1 + 1 };
+  const bezel: Rect = { x0: s0.x0 - 1, y0: s0.y0 - 1, x1: s0.x0 + W, y1: s0.y0 + H };
   const glue = new Glue(b, Object.fromEntries(Object.entries(blocksOf(b.build())).map(([k, v]) => [k, v.box])) as Record<BlockName, Rect>, bezel);
   const st = ctl.strobes;
   const T0 = ctl.strobeOffset;
@@ -681,7 +673,7 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   glue.tree(ctl.power, [q.power, hy.power, ty.power, hx.power, tx.power, hs.power, ts.power], 'g-power');
 
   const network = b.build();
-  return assemble({ b, network, parts, glue, F, start, screen, bezel, hX, hY, tX, tY, shift, inputs, headRows, headCols, tailRows, tailCols });
+  return assemble({ b, network, parts, glue, F, start, bezel, hX, hY, tX, tY, shift, inputs, headRows, headCols, tailRows, tailCols });
 }
 
 interface Solved {
@@ -691,7 +683,6 @@ interface Solved {
   glue: Glue;
   F: number;
   start: { x: number; y: number };
-  screen: Rect;
   bezel: Rect;
   /** Offsets after the frame clock fire: ring moves, queue shift, input fires; row fires; column fires after the X move. */
   hX: number;
@@ -741,7 +732,15 @@ function assemble(s: Solved): Snake {
     const restAt = Math.max(...rows) + sel.settle;
     const next = F + Math.min(Math.min(...rows) + sch.holdStart[0], Math.min(...cols) + sch.columnPulse[0]);
     if (restAt >= next) throw new Error(`snake: ${name} plane never rests`);
-    return { moveX, moveY, readX: moveX + (name === 'head' ? hx : tx).readLag, readY: moveY + (name === 'head' ? hy : ty).readLag, cols: span(cols), rows: span(rows), skew, window: [sel.skew.min, sel.skew.max], lamp: span(lamp), q: span(qf) };
+    const [rx, ry] = name === 'head' ? [hx, hy] : [tx, ty];
+    const line = (r: Ring) => {
+      if (new Set(r.lineDelay).size !== 1) throw new Error('snake: lines fire on different ticks');
+      return r.readLag + r.lineDelay[0]!;
+    };
+    return {
+      moveX, moveY, readX: moveX + rx.readLag, readY: moveY + ry.readLag, linesX: moveX + line(rx), linesY: moveY + line(ry),
+      cols: span(cols), rows: span(rows), skew, window: [sel.skew.min, sel.skew.max], lamp: span(lamp), q: span(qf),
+    };
   };
   const head = side('head', hs, 1, s.hX, s.hY, s.headRows, s.headCols);
   const tail = side('tail', ts, -1, s.tX, s.tY, s.tailRows, s.tailCols);
@@ -800,7 +799,7 @@ function assemble(s: Solved): Snake {
     b: s.b,
     keys: ctl.keys,
     lamps,
-    screen: s.screen,
+    screen: { x0: LAYOUT.screen.x0, y0: LAYOUT.screen.y0, w: W, h: H },
     bezel: s.bezel,
     blocks,
     parts,
@@ -810,7 +809,7 @@ function assemble(s: Solved): Snake {
     frameTick,
     settledTick: (k) => frameTick(k) + lampSpan[1],
     schedule,
-    latency: { strobeToLamp, pressToLampMin: toStrobe[0] + strobeToLamp[0], pressToLampMax: toStrobe[1] + strobeToLamp[1] },
+    latency: { strobeToLamp, pressToStrobe: toStrobe, pressToLampMin: toStrobe[0] + strobeToLamp[0], pressToLampMax: toStrobe[1] + strobeToLamp[1] },
     probes,
   };
 }
