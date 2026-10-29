@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Simulation, type Network } from '../engine';
 import { mulberry32 } from '../engine/rng';
 import { DIRECTIONS, type Direction } from './snake-control';
-import { buildSnake, segmentDistance, segmentHitsRect, squares, type Snake } from './snake-machine';
-import { Ambiguous, controlFacts, controlModel, disambiguate, snakeModel, type KeyPress } from './snake-model';
+import { buildSnake, KEY_CLEARANCE, segmentDistance, segmentHitsRect, squares, turnExtremes, type Snake } from './snake-machine';
+import { controlFacts, controlModel, disambiguate, intentModel, snakeModel, STEP, type KeyPress } from './snake-model';
 
 const snake = buildSnake();
 const factsCache = new Map<Snake, ReturnType<typeof controlFacts>>();
@@ -11,22 +11,22 @@ const factsOf = (s: Snake) => factsCache.get(s) ?? factsCache.set(s, controlFact
 const facts = factsOf(snake);
 const F = snake.F;
 const L = 4;
-/** Most pulses ever in flight at once (the long run measures 222). */
-const MAX_PULSES = 250;
+/** Most pulses ever in flight at once (the long run measures 177). */
+const MAX_PULSES = 200;
 /** Glue: every connection not internal to a block, and every relay outside the blocks. */
-const GLUE_CONNECTIONS = 95;
-const GLUE_NEURONS = 35;
-const BUDGET = { neurons: 1160, connections: 2599, size: [43, 66] };
+const GLUE_CONNECTIONS = 99;
+const GLUE_NEURONS = 39;
+const BUDGET = { neurons: 1173, connections: 2612, size: [43, 66] };
 /** Latencies in ticks (see Snake.latency). */
-const LATENCY = { strobeToLamp: [1368, 1442], pressToStrobe: [146, 647], pressToLampMin: 1514, pressToLampMax: 2089 };
+const LATENCY = { strobeToLamp: [1368, 1442], pressToStrobe: [212, 707], pressToLampMin: 1580, pressToLampMax: 2149 };
 /** The frame schedule: the table in buildSnake(), ticks after frameTick(k). */
 const SCHEDULE: Snake['schedule'] = {
   strobe: 178,
-  head: { moveX: 636, moveY: 414, readX: 714, readY: 496, linesX: 1021, linesY: 757, cols: [1287, 1320], rows: [1012, 1052], skew: [-308, -235], window: [-323, -180], lamp: [1546, 1620], q: [1410, 1472] },
-  tail: { moveX: 670, moveY: 418, readX: 748, readY: 500, linesX: 1055, linesY: 761, cols: [1321, 1354], rows: [1037, 1065], skew: [-317, -256], window: [-318, -173], lamp: [1580, 1655], q: [1443, 1507] },
-  queue: { shift: 160, inputs: [259, 326], outputs: 194, any: 243 },
-  lamps: [1546, 1655],
-  powerSlack: { headX: 148, headY: 197, tailX: 2094, tailY: 2026, queue: 35, headSelect: 375, tailSelect: 2294 },
+  head: { moveX: 636, moveY: 403, readX: 714, readY: 485, linesX: 1021, linesY: 746, cols: [1287, 1320], rows: [1001, 1041], skew: [-319, -246], window: [-323, -180], lamp: [1546, 1620], q: [1410, 1472] },
+  tail: { moveX: 684, moveY: 434, readX: 762, readY: 516, linesX: 1069, linesY: 777, cols: [1335, 1368], rows: [1053, 1081], skew: [-315, -254], window: [-318, -173], lamp: [1594, 1669], q: [1457, 1521] },
+  queue: { shift: 170, inputs: [273, 340], outputs: 204, any: 253 },
+  lamps: [1546, 1669],
+  powerSlack: { headX: 162, headY: 133, tailX: 1991, tailY: 2052, queue: 13, headSelect: 377, tailSelect: 2084 },
 };
 
 interface RunOptions {
@@ -142,12 +142,12 @@ function run(s: Snake, frames: number, presses: KeyPress[], opts: RunOptions = {
   return { error, maxPulses, dirs: dirs.slice(0, frames), headRise, visited, pulsesByFrame };
 }
 
-/** Random presses: bursts of 1-4 keys (some on the same tick), gaps up to 3 frames; ambiguous ties dropped. */
+/** Random presses from tick 1 (power-on included): bursts of 1-4 keys (some on the same tick), gaps up to 3 frames; ambiguous ties dropped. */
 function randomPresses(seed: number, frames: number, s = snake): KeyPress[] {
   const rng = mulberry32(seed);
   const presses: KeyPress[] = [];
   const F = s.F;
-  let t = 30;
+  let t = 1;
   while (t < frames * F) {
     const burst = 1 + Math.floor(rng() * 4);
     for (let i = 0; i < burst; i++) presses.push({ t: t + (rng() < 0.3 ? 0 : Math.floor(rng() * 40)), key: DIRECTIONS[Math.floor(rng() * 4)]! });
@@ -158,21 +158,13 @@ function randomPresses(seed: number, frames: number, s = snake): KeyPress[] {
   return kept;
 }
 
-/** The model's turn frame for a press of `to` at tick p while moving `from` (pressed at tick 40), or undefined on a tie. */
-function turnFrame(from: Direction, to: Direction, p: number): number | undefined {
-  try {
-    const dirs = controlModel(Math.ceil(p / F) + 3, [{ t: 40, key: from }, { t: p, key: to }], facts);
-    return dirs.findIndex((d, k) => k > 2 && d === to);
-  } catch (e) {
-    if (e instanceof Ambiguous) return undefined;
-    throw e;
-  }
+/** The latest press tick (key `to`, moving `from` since tick 40) that still turns the snake at frame m. */
+function lastPressFor(from: Direction, to: Direction, m: number): number {
+  const turnsAt = (p: number) => controlModel(m + 2, [{ t: 40, key: from }, { t: p, key: to }], facts)[m] === to;
+  for (let p = snake.frameTick(m) + facts.readOffset; ; p--) if (turnsAt(p) && !turnsAt(p + 1)) return p;
 }
 
-/** The latest press tick (key `to`, moving `from`) that still turns the snake at frame m. */
-function lastPressFor(from: Direction, to: Direction, m: number): number {
-  for (let p = snake.frameTick(m) + facts.readOffset; ; p--) if (turnFrame(from, to, p) === m) return p;
-}
+const range = (lo: number, hi: number, step = 1) => Array.from({ length: Math.floor((hi - lo) / step) + 1 }, (_, i) => lo + i * step);
 
 describe('snake machine: behaviour', () => {
   it('idle: moves right and wraps, growing to 4 lit pixels in a row, for 100 frames', () => {
@@ -188,26 +180,50 @@ describe('snake machine: behaviour', () => {
     }
   });
 
-  it('every key at several phases turns the snake at exactly the frame the press model predicts', () => {
-    const m = 6;
+  /**
+   * Every turn (12 pairs), pressed at every tick from 12 before its cutoff
+   * to 30 after (where a key that changes both bits could show a third
+   * direction for a frame) and at 26 phases across the whole frame. One run
+   * per pair: moving `from`, press `to` at cutoff + o, back to `from` two
+   * frames later. The turn shows at exactly the predicted frame (the slot's
+   * frame if o <= 0, the next if o > 0), and no frame ever goes a direction
+   * other than `from` or `to`.
+   */
+  it('every turn, at every phase near its cutoff and across the frame: the predicted frame, never a third direction', { timeout: 120_000 }, () => {
     let turns = 0;
     for (const from of DIRECTIONS)
       for (const to of DIRECTIONS) {
         if (from === to) continue;
-        const last = lastPressFor(from, to, m);
-        const phases = [last - F + 1, last - Math.round(F / 2), last - 1, last, last + 1, last + Math.round(F / 3)];
-        for (const p of phases) {
-          const k = turnFrame(from, to, p);
-          if (k === undefined) continue; // a tie the model leaves open
-          expect(k, `${from} -> ${to} at ${p}`).toBe(p <= last ? m : m + 1);
-          const r = run(snake, k + 3, [{ t: 40, key: from }, { t: p, key: to }]);
-          expect(r.error, `${from} -> ${to} at ${p}`).toBeUndefined();
-          expect(r.dirs[k]).toBe(to);
-          expect(r.dirs[k - 1]).not.toBe(to);
+        const cut = lastPressFor(from, to, 6) - snake.frameTick(6);
+        const offsets = [...range(-12, 30), ...range(-F + 1, F - 1, 37)];
+        const presses: KeyPress[] = [{ t: 40, key: from }];
+        const slots = offsets.map((o, i) => {
+          const m = 4 + 4 * i;
+          presses.push({ t: snake.frameTick(m) + cut + o, key: to }, { t: snake.frameTick(m + 2) + cut, key: from });
+          return { m, o };
+        });
+        const frames = 4 + 4 * slots.length;
+        const r = run(snake, frames, presses);
+        expect(r.error, `${from} -> ${to}`).toBeUndefined();
+        expect(r.dirs.slice(2).filter((d) => d !== from && d !== to), `${from} -> ${to}`).toEqual([]);
+        for (const { m, o } of slots) {
+          expect([r.dirs[m - 1], r.dirs[m], r.dirs[m + 1]], `${from} -> ${to} at cutoff ${o >= 0 ? '+' : ''}${o}`).toEqual([from, o <= 0 ? to : from, to]);
           turns++;
         }
       }
-    expect(turns).toBeGreaterThanOrEqual(12 * 5);
+    expect(turns).toBe(12 * 69);
+  });
+
+  it('property: presses at least facts.gap apart: the snake always goes where the last press says (intent model)', { timeout: 60_000 }, () => {
+    const rng = mulberry32(21);
+    const presses: KeyPress[] = [];
+    for (let t = 1 + Math.floor(rng() * 20); t < 600 * F; t += facts.gap + Math.floor(rng() * 1.5 * F)) presses.push({ t, key: DIRECTIONS[Math.floor(rng() * 4)]! });
+    const want = intentModel(605, presses, facts);
+    expect(controlModel(605, presses, facts)).toEqual(want);
+    const r = run(snake, 600, presses);
+    expect(r.error).toBeUndefined();
+    expect(r.dirs).toEqual(want.slice(0, 600));
+    expect(presses.length).toBeGreaterThan(600);
   });
 
   for (const seed of [1, 2, 3, 4])
@@ -217,6 +233,30 @@ describe('snake machine: behaviour', () => {
       expect(r.error).toBeUndefined();
       expect(new Set(r.dirs)).toEqual(new Set(DIRECTIONS));
     });
+
+  it('between settled moments the snake shows 5 pixels for at most 123 ticks a frame, or 3 for at most 26', { timeout: 60_000 }, () => {
+    const sim = new Simulation(snake.network);
+    for (const p of randomPresses(6, 300)) sim.schedule(p.t, snake.keys[p.key]);
+    const lamps = snake.lamps.flat();
+    const longest = { 3: 0, 5: 0 };
+    let [value, since] = [4, 0];
+    while (sim.tick < snake.settledTick(299)) {
+      sim.step();
+      if (sim.tick < snake.settledTick(4)) continue;
+      const sum = lamps.reduce((s, id) => s + sim.charge(id), 0);
+      if (sum !== value) {
+        if (value === 3 || value === 5) longest[value] = Math.max(longest[value], sim.tick - since);
+        [value, since] = [sum, sim.tick];
+      }
+      expect([3, 4, 5]).toContain(sum);
+    }
+    // The schedule bounds them (head and tail lamp spans); this run's longest are 16 and 97.
+    const { head, tail } = snake.schedule;
+    expect([head.lamp[1] - tail.lamp[0], tail.lamp[1] - head.lamp[0]]).toEqual([26, 123]);
+    expect(longest[3]).toBeLessThanOrEqual(26);
+    expect(longest[5]).toBeLessThanOrEqual(123);
+    expect(longest).toEqual({ 3: 16, 5: 97 });
+  });
 
   it('other frame periods and start positions: the same layout, re-timed, still matches the model', { timeout: 60_000 }, () => {
     for (const [F2, start] of [[360, { x: 9, y: 7 }], [600, { x: 4, y: 0 }]] as const) {
@@ -241,11 +281,12 @@ describe('snake machine: behaviour', () => {
     const r = run(snake, 3000, randomPresses(5, 3000));
     // No drift: every block was back at rest at its settled moment in every frame (run's probes).
     expect(r.error).toBeUndefined();
-    // Bounded: the same ceiling early and late (no build-up), well under one pulse per connection.
+    // Bounded: no build-up (the last 1000 frames peak no higher than the first 1000), well under one pulse per connection.
     const early = Math.max(...r.pulsesByFrame.slice(0, 1000));
     const late = Math.max(...r.pulsesByFrame.slice(2000, 3000));
     expect(r.maxPulses).toBeLessThanOrEqual(MAX_PULSES);
-    expect([early, late].every((m) => m <= MAX_PULSES && m > MAX_PULSES / 2)).toBe(true);
+    expect(r.maxPulses).toBeGreaterThan(MAX_PULSES * 0.8);
+    expect(late, `early ${early}, late ${late}`).toBeLessThanOrEqual(early);
   });
 });
 
@@ -259,7 +300,8 @@ describe('snake machine: glue mutation test', () => {
    */
   it('every glue connection and every glue threshold matters', { timeout: 300_000 }, () => {
     const plan: Array<[number, Direction]> = [[10, 'down'], [18, 'left'], [20, 'up'], [22, 'right']];
-    const presses = plan.map(([k, key]) => ({ t: snake.frameTick(k), key }));
+    // Each press counts by frame k's read (it reaches the bits in under 160 ticks).
+    const presses = plan.map(([k, key]) => ({ t: snake.frameTick(k) + facts.readOffset - 200, key }));
     const frames = 28;
     const ok = run(snake, frames, presses);
     expect(ok.error).toBeUndefined();
@@ -327,13 +369,21 @@ describe('snake machine: geometry and budget', () => {
     expect(new Set(owned).size).toBe(net.neurons.length);
   });
 
-  it('the control unit sits left of the screen, its keys level with the screen middle', () => {
+  it('the keys: a row (◀ ▲ ▼ ▶) on top of the control unit, left of the screen at its top edge; no wire passes over a key', () => {
     const keys = DIRECTIONS.map((d) => cell.get(snake.keys[d])!);
-    const mid = snake.screen.y0 + (snake.screen.h - 1) / 2;
-    expect(Math.min(...keys.map((k) => k.y)) <= mid && Math.max(...keys.map((k) => k.y)) >= mid - 1).toBe(true);
-    expect(snake.blocks.control.box.x1).toBeLessThan(snake.bezel.x0);
-    expect(snake.blocks.control.box.y0).toBeGreaterThanOrEqual(snake.bezel.y0);
-    expect(snake.blocks.control.box.y1).toBeLessThanOrEqual(snake.bezel.y1);
+    const { bezel, blocks } = snake;
+    // Left to right ◀ ▲ ▼ ▶, one row, the control unit's top row, level with the bezel's top edge.
+    expect(['left', 'up', 'down', 'right'].map((d) => cell.get(snake.keys[d as Direction])!.x)).toEqual([...keys.map((k) => k.x)].sort((a, b) => a - b));
+    expect(new Set(keys.map((k) => k.y))).toEqual(new Set([blocks.control.box.y0]));
+    expect(blocks.control.box.y0).toBe(bezel.y0);
+    expect(blocks.control.box.y1).toBeLessThanOrEqual(bezel.y1);
+    expect(blocks.control.box.x1).toBeLessThan(bezel.x0);
+    // Within reach of the screen: the nearest key is 5 cells from the bezel.
+    expect(bezel.x0 - Math.max(...keys.map((k) => k.x))).toBe(5);
+    const over = net.connections.flatMap((c) =>
+      keys.filter((k) => k.id !== c.from && k.id !== c.to && segmentDistance(cell.get(c.from)!, cell.get(c.to)!, k) < KEY_CLEARANCE).map((k) => `${c.from} -> ${c.to} over ${k.id}`),
+    );
+    expect(over).toEqual([]);
   });
 
   it('glue is tidy: few neurons passed over, few block corners clipped (ring line bundles aside)', () => {
@@ -344,15 +394,20 @@ describe('snake machine: geometry and budget', () => {
     const hops = snake.glue.connections.filter(([a]) => !lines.has(a));
     const over = hops.map(([a, z]) => net.neurons.filter((m) => m.id !== a && m.id !== z && segmentDistance(cell.get(a)!, cell.get(z)!, m) < 0.45).length);
     const clips = hops.filter(([a, z]) => Object.entries(snake.blocks).some(([n, b]) => n !== blockOf(a) && n !== blockOf(z) && segmentHitsRect(cell.get(a)!, cell.get(z)!, squares(b.box))));
-    // At most 6 neurons under one hop (a wire into a ring's centre crosses its disc).
-    expect(Math.max(...over)).toBeLessThanOrEqual(6);
-    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual({ hops: 59, over: 94, clips: 8 });
+    // At most 5 neurons under one hop (a wire into a ring's centre crosses its disc).
+    expect(Math.max(...over)).toBeLessThanOrEqual(5);
+    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual({ hops: 63, over: 87, clips: 11 });
   });
 
-  it('the probes cover every neuron but the lamps (checked against the model instead)', () => {
+  it('the probes cover every neuron but the lamps (checked against the model) and the glue relays (which cannot hold charge)', () => {
     const state = { head: { x: 1, y: 1 }, tail: { x: 0, y: 0 }, queued: [0, 1, 2, 3] };
     const probed = new Set(snake.probes(9, state).flatMap((p) => Object.keys(p.allowed)));
-    expect(net.neurons.filter((n) => !probed.has(n.id)).map((n) => n.id).sort()).toEqual([...lampIds].sort());
+    expect(net.neurons.filter((n) => !probed.has(n.id)).map((n) => n.id).sort()).toEqual([...lampIds, ...snake.glue.ids].sort());
+    // A threshold-1 Normal neuron with no Inhibitor input fires on every pulse and never holds charge.
+    for (const id of snake.glue.ids) {
+      expect([cell.get(id)!.kind, cell.get(id)!.threshold]).toEqual(['normal', 1]);
+      expect(net.connections.filter((c) => c.to === id).map((c) => cell.get(c.from)!.kind).filter((k) => k === 'negative')).toEqual([]);
+    }
   });
 
   it('budget and size', () => {
@@ -378,13 +433,19 @@ describe('snake machine: geometry and budget', () => {
 });
 
 describe('snake machine: latency', () => {
-  it('strobe to lamp, measured on every pixel, is the computed span', { timeout: 60_000 }, () => {
+  it('strobe to lamp, measured on every pixel, is headLampAt - strobe and spans the documented range', { timeout: 60_000 }, () => {
     const lat: number[] = [];
     const visited = new Set<string>();
     for (const seed of [1, 2]) {
-      const r = run(snake, 600, randomPresses(seed, 600));
+      const presses = randomPresses(seed, 600);
+      const r = run(snake, 600, presses);
       expect(r.error).toBeUndefined();
-      for (const [k, t] of r.headRise) lat.push(t - snake.frameTick(k) - snake.schedule.strobe);
+      const model = snakeModel(r.dirs, snake.start);
+      for (const [k, t] of r.headRise) {
+        const { x, y } = model.heads[k]!;
+        expect(t - snake.frameTick(k), `pixel (${x}, ${y})`).toBe(snake.headLampAt(x, y));
+        lat.push(t - snake.frameTick(k) - snake.schedule.strobe);
+      }
       r.visited.forEach((v) => visited.add(v));
     }
     expect(visited.size).toBe(80);
@@ -392,26 +453,32 @@ describe('snake machine: latency', () => {
     expect(snake.latency).toEqual(LATENCY);
   });
 
-  it('press to lamp: every turn lands within the bounds; press to strobe reaches both extremes', () => {
-    const m = 6;
-    const toStrobe: number[] = [];
-    for (const from of DIRECTIONS)
-      for (const to of DIRECTIONS) {
-        if (from === to) continue;
-        const last = lastPressFor(from, to, m);
-        for (const p of [last, last + 1, last - 200]) {
-          const k = turnFrame(from, to, p);
-          if (k === undefined) continue;
-          const r = run(snake, k + 1, [{ t: 40, key: from }, { t: p, key: to }]);
-          expect(r.error).toBeUndefined();
-          toStrobe.push(snake.frameTick(k) + snake.schedule.strobe - p);
-          const rise = r.headRise.get(k);
-          if (rise === undefined) continue; // the head entered the pixel the tail left
-          expect(rise - p).toBeGreaterThanOrEqual(snake.latency.pressToLampMin);
-          expect(rise - p).toBeLessThanOrEqual(snake.latency.pressToLampMax);
-        }
-      }
-    expect([Math.min(...toStrobe), Math.max(...toStrobe)]).toEqual(snake.latency.pressToStrobe);
+  /**
+   * Press to lamp, played in the machine at both extremes: the fastest turn
+   * (key and press phase, from the press model) into the pixel the head
+   * lamp lights fastest, and the slowest into the slowest. The snake is
+   * started where that turn takes the head onto that pixel.
+   */
+  it('press to lamp: the fastest and slowest turns, played in the machine, take exactly pressToLampMin and pressToLampMax', { timeout: 60_000 }, () => {
+    const pixels = Array.from({ length: 80 }, (_, i) => ({ x: i % 10, y: Math.floor(i / 10) }));
+    const at = (p: { x: number; y: number }) => snake.headLampAt(p.x, p.y);
+    const fastest = pixels.reduce((a, p) => (at(p) < at(a) ? p : a));
+    const slowest = pixels.reduce((a, p) => (at(p) > at(a) ? p : a));
+    const turns = turnExtremes(facts, snake.schedule.strobe);
+    for (const [turn, pixel, want] of [[turns.min, fastest, snake.latency.pressToLampMin], [turns.max, slowest, snake.latency.pressToLampMax]] as const) {
+      const presses = [{ t: 40, key: turn.from }, { t: turn.press, key: turn.to }];
+      const dirs = controlModel(turn.frame + 1, presses, facts);
+      expect(dirs[turn.frame]).toBe(turn.to);
+      // Start so that frame turn.frame takes the head onto the pixel.
+      const moved = dirs.reduce((m, d) => ({ x: m.x + STEP[d].dx, y: m.y + STEP[d].dy }), { x: 0, y: 0 });
+      const start = { x: (((pixel.x - moved.x) % 10) + 10) % 10, y: (((pixel.y - moved.y) % 8) + 8) % 8 };
+      const other = buildSnake({ start });
+      const r = run(other, turn.frame + 1, presses);
+      expect(r.error).toBeUndefined();
+      expect(snakeModel(r.dirs, start).heads[turn.frame]).toEqual(pixel);
+      expect(r.headRise.get(turn.frame)! - turn.press).toBe(want);
+    }
+    expect(turns.min.ticks + at(fastest) - snake.schedule.strobe).toBe(snake.latency.pressToLampMin);
   });
 });
 
