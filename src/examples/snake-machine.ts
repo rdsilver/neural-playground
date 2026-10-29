@@ -67,8 +67,8 @@ const tt = (a: Cell, b: Cell) => travelTicks(a, b);
 
 /**
  * Board layout (cells; x right, y down). The screen is the centrepiece; the
- * head plane hangs below it and the tail plane above it (mirrored), each one
- * cell clear of the screen's bezel margin. Every other block sits on the
+ * head plane hangs below it and the tail plane above it (mirrored), leaving
+ * the screen's one-cell bezel margin free. Every other block sits on the
  * left: the control unit (keys) beside the screen, the move queue next to
  * it, the head rings left of the head plane and the tail rings left of the
  * tail plane, each ring's line row facing its plane's inputs.
@@ -133,7 +133,7 @@ const inRect = (c: Cell, r: Rect) => c.x >= r.x0 && c.x <= r.x1 && c.y >= r.y0 &
 
 /** Longest glue hop, in cells. */
 const MAX_HOP = 9;
-/** Where glue relays may go: the corridors left of the rings and between the rings and the planes (rows of the planes). */
+/** Where glue relays may go: from two cells left of the rings to the planes' left edge, over the planes' height. */
 const GLUE_AREA: Rect = { x0: -7, y0: 1, x1: 13, y1: 66 };
 /** Route cost of one relay (in cells of wire). */
 const RELAY_COST = 3;
@@ -281,7 +281,9 @@ class Glue {
 
   /**
    * Make a route a -> relays -> z exactly `total` ticks long: swap in the
-   * cheapest detour (one relay moved, or one or two inserted into a hop).
+   * cheapest detour (one relay moved, or one or two inserted into a hop); if
+   * no single detour reaches, first insert the relay that adds the most
+   * ticks per unit of cost, and repeat (up to 4 times).
    */
   pad(a: Cell, relays: Cell[], z: Cell, total: number, own: ReadonlySet<string>, avoid: ReadonlySet<string>, depth = 0): Cell[] | undefined {
     const pts = [a, ...relays, z];
@@ -367,10 +369,7 @@ class Glue {
           break;
         }
       }
-      if (!best) {
-        const r = this.route([src], z, this.own(src, z));
-        throw new Error(`glue: no ${total}-tick tap ${src} -> ${z}; route ${JSON.stringify(r.relays)} takes ${this.pathTicks(src, r.relays, z)}`);
-      }
+      if (!best) throw new Error(`glue: no ${total}-tick tap ${src} -> ${z}`);
       const relays = this.build(best.from, z, best.path, name);
       let t = at.get(best.from)!;
       [best.from, ...relays].forEach((id, k, all) => k > 0 && at.set(id, (t += this.ticks(all[k - 1]!, id))));
@@ -475,10 +474,9 @@ class Glue {
       const ys0 = Array.from({ length: dHi - dLo + 1 }, (_, k) => mX - dHi + k).sort((a, b) => Math.abs(a - from - ry) - Math.abs(b - from - ry) || a - b);
       for (const mY of ys0) {
         if (mY - from < ry || mX - mY < dLo || mX - mY > dHi) continue;
-        const saved = this.ids.length;
         if (this.padLines(ys, mY - from, memoY)) {
           if (this.padLines(xs, mX - from)) return [mX, mY];
-          throw new Error(`glue: built Y lines but no X lines at ${mX} (relays from ${saved})`);
+          throw new Error(`glue: built Y lines but no X lines at ${mX}`);
         }
       }
     }
@@ -689,10 +687,12 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   glue.line(q.any, tx.read, tX + tx.readLag - out - q.anyLag, 'g-tx-read');
 
   // Power-on: the control unit's one-shot timer (tick 1) powers every block, through a tree of relays.
-  glue.tree(ctl.power, [q.power, hy.power, ty.power, hx.power, tx.power, hs.power, ts.power], 'g-power');
+  const powered = [q.power, hy.power, ty.power, hx.power, tx.power, hs.power, ts.power];
+  const arrive = glue.tree(ctl.power, powered, 'g-power');
+  const power = Object.fromEntries(powered.map((id, i) => [id, arrive[i]!]));
 
   const network = b.build();
-  return assemble({ b, network, parts, glue, F, start, bezel, hX, hY, tX, tY, shift, inputs, headRows, headCols, tailRows, tailCols });
+  return assemble({ b, network, parts, glue, F, start, bezel, power, hX, hY, tX, tY, shift, inputs, headRows, headCols, tailRows, tailCols });
 }
 
 interface Solved {
@@ -703,6 +703,8 @@ interface Solved {
   F: number;
   start: { x: number; y: number };
   bezel: Rect;
+  /** Ticks from the power-on timer's fire to each block's power input firing (through the relay tree). */
+  power: Record<string, number>;
   /** Offsets after the frame clock fire: ring moves, queue shift, input fires; row fires; column fires after the X move. */
   hX: number;
   hY: number;
@@ -773,7 +775,7 @@ function assemble(s: Solved): Snake {
   const out = s.shift + q.outLag;
 
   // Power-on (the control's one-shot timer fires at tick 1 = frameTick(0)).
-  const pw = (id: string) => t(ctl.power, id);
+  const pw = (id: string) => s.power[id]!;
   const powerSlack: Record<string, number> = {
     headX: s.hX - pw(hx.power) - hx.powerLead,
     headY: s.hY - pw(hy.power) - hy.powerLead,

@@ -26,7 +26,7 @@ const SCHEDULE: Snake['schedule'] = {
   tail: { moveX: 670, moveY: 418, readX: 748, readY: 500, linesX: 1055, linesY: 761, cols: [1321, 1354], rows: [1037, 1065], skew: [-317, -256], window: [-318, -173], lamp: [1580, 1655], q: [1443, 1507] },
   queue: { shift: 160, inputs: [259, 326], outputs: 194, any: 243 },
   lamps: [1546, 1655],
-  powerSlack: { headX: 224, headY: 197, tailX: 2164, tailY: 2121, queue: 35, headSelect: 399, tailSelect: 2313 },
+  powerSlack: { headX: 148, headY: 197, tailX: 2094, tailY: 2026, queue: 35, headSelect: 375, tailSelect: 2294 },
 };
 
 interface RunOptions {
@@ -455,15 +455,29 @@ describe('snake machine: frame schedule', () => {
       any: [[queue.any], S.queue.any, S.queue.any],
     };
     const groupOf = new Map(Object.entries(groups).flatMap(([g, [ids]]) => ids.map((id) => [id, g] as const)));
+    const powers = { headX: headX.power, headY: headY.power, tailX: tailX.power, tailY: tailY.power, queue: queue.power, headSelect: headSelect.power, tailSelect: tailSelect.power };
+    const powerFires = new Map<string, number[]>();
     const seen = new Map<string, number[]>();
     const sim = new Simulation(snake.network);
     for (const p of randomPresses(3, 1500)) sim.schedule(p.t, snake.keys[p.key]);
     while (sim.tick < snake.frameTick(1500))
       for (const e of sim.step()) {
+        if (Object.values(powers).includes(e.neuron)) powerFires.set(e.neuron, [...(powerFires.get(e.neuron) ?? []), e.tick]);
         const g = groupOf.get(e.neuron);
         // Offset past the group's documented start, mod F: a span may straddle a frame boundary.
         if (g) seen.set(g, [...(seen.get(g) ?? []), (((e.tick - 1 - groups[g]![1]) % F) + F) % F]);
       }
+    // Power-on: each block's power input fires once, early enough by exactly powerSlack ticks.
+    const firstNeed = {
+      headX: [S.head.moveX, headX.powerLead], headY: [S.head.moveY, headY.powerLead], tailX: [L * F + S.tail.moveX, tailX.powerLead], tailY: [L * F + S.tail.moveY, tailY.powerLead],
+      queue: [S.queue.shift, queue.powerLead], headSelect: [S.head.rows[0], headSelect.powerLead], tailSelect: [L * F + S.tail.rows[0], tailSelect.powerLead],
+    } as const;
+    for (const [name, id] of Object.entries(powers)) {
+      const fired = powerFires.get(id)!;
+      expect(fired, name).toHaveLength(1);
+      const [need, lead] = firstNeed[name as keyof typeof firstNeed];
+      expect(snake.frameTick(0) + need - lead - fired[0]!, name).toBe(S.powerSlack[name]);
+    }
     for (const [g, [, lo, hi]] of Object.entries(groups)) {
       expect(hi - lo, g).toBeLessThan(F);
       const got = seen.get(g)!;
