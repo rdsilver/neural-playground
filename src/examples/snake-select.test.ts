@@ -38,11 +38,11 @@ const unit = (p: 1 | -1) => {
 type Frame = { x: number; y: number; s: number } | null;
 
 /**
- * Drive a plane: power at tick 1; frame k's row fires at T_k = T0 + k F, its
- * column at T_k - s. Checks every tick that every lamp holds exactly the sum
- * of the pulses due by then (so each selected lamp gets one pulse of the
- * plane's polarity at column + hit, and no other lamp anything), and at
- * column + settle of every frame that every internal neuron is at rest.
+ * Drive a plane: power at tick 1; frame k's row fires at T_k = T0 + k F
+ * (T0 = 1 + powerLead), its column at T_k - s. Checks that every lamp holds
+ * exactly the sum of the pulses due by then (so each selected lamp gets one
+ * pulse of the plane's polarity at column + hit, and no other lamp anything),
+ * and at T_k + settle that every internal neuron is at rest.
  * Returns the first problem found, or undefined.
  */
 function run(u: Unit, F: number, frames: Frame[], net = u.net, restOffset = u.sel.settle): string | undefined {
@@ -66,17 +66,33 @@ function run(u: Unit, F: number, frames: Frame[], net = u.net, restOffset = u.se
   const want = lamps.map((r) => r.map(() => 0));
   const rest = sel.restFor();
   const ids = Object.keys(rest);
+  const lampCheck = (only?: Array<[number, number]>) => {
+    for (const [x, y] of only ?? lamps.flatMap((r, y) => r.map((_, x) => [x, y] as [number, number]))) {
+      const got = sim.charge(lamps[y]![x]!);
+      if (got !== want[y]![x]) return `lamp (${x}, ${y}) holds ${got}, not ${want[y]![x]}, at tick ${sim.tick}`;
+    }
+    return undefined;
+  };
+  // A lamp only ever gets pulses from its own Qs, so a stray pulse leaves a
+  // lasting mark: every lamp is checked at each frame's settled moment and at
+  // the end; a lamp that is due a pulse is also checked on the ticks just
+  // before and at its arrival (exact tick).
   while (sim.tick < end) {
+    const next = due.get(sim.tick + 1);
+    const problem = (next && lampCheck(next)) || undefined;
+    if (problem) return problem;
     sim.step();
-    for (const [x, y] of due.get(sim.tick) ?? []) want[y]![x]! += polarity;
-    for (let y = 0; y < lamps.length; y++)
-      for (let x = 0; x < lamps[0]!.length; x++) {
-        const got = sim.charge(lamps[y]![x]!);
-        if (got !== want[y]![x]) return `lamp (${x}, ${y}) holds ${got}, not ${want[y]![x]}, at tick ${sim.tick}`;
-      }
-    if (restAt.has(sim.tick))
+    for (const [x, y] of next ?? []) want[y]![x]! += polarity;
+    const after = (next && lampCheck(next)) || undefined;
+    if (after) return after;
+    if (restAt.has(sim.tick)) {
+      const all = lampCheck();
+      if (all) return all;
       for (const n of ids) if (sim.charge(n) !== rest[n]) return `${n} holds ${sim.charge(n)}, not ${rest[n]}, at tick ${sim.tick}`;
+    }
   }
+  const all = lampCheck();
+  if (all) return all;
   if (sim.pulses().length) return 'pulses still in flight at the end';
   for (const n of ids) if (sim.charge(n) !== rest[n]) return `${n} holds ${sim.charge(n)} at the end`;
   return undefined;
