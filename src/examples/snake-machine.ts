@@ -173,22 +173,30 @@ const cellKey = (c: Cell) => `${c.x},${c.y}`;
 export const squares = (r: Rect): Rect => ({ x0: r.x0 - 0.5, y0: r.y0 - 0.5, x1: r.x1 + 0.5, y1: r.y1 + 0.5 });
 const inRect = (c: Cell, r: Rect) => c.x >= r.x0 && c.x <= r.x1 && c.y >= r.y0 && c.y <= r.y1;
 
+/** Longest glue hop, in cells. */
+const MAX_HOP = 9;
+/** Route cost of one relay (in cells of wire). */
+const RELAY_COST = 3;
+
 /**
- * Glue between the blocks: direct wires and delay lines of relays, placed in
- * free cells outside every block's box and off the screen; no glue wire may
- * cross the screen or its bezel margin. Records every glue neuron and
- * connection (the mutation test cuts exactly these).
+ * Glue between the blocks: direct wires and lines of relays (threshold 1),
+ * placed in free cells outside every block's box and off the screen; no
+ * glue wire may cross the screen or its bezel margin. Routes are cheapest
+ * paths (Dijkstra) where a hop costs its length, plus a penalty for every
+ * neuron it passes over and for running through a block other than its
+ * own ends'; an exact delay is then made by a detour (one or two relays
+ * swapped in). Records every glue neuron and connection.
  */
 class Glue {
   readonly ids: string[] = [];
   readonly conns: Array<[string, string]> = [];
   private cells = new Map<string, Cell>();
   private occupied = new Set<string>();
-  private near = new Map<string, number>();
+  private nearCache = new Map<string, number>();
 
   constructor(
     private b: NetworkBuilder,
-    private boxes: Rect[],
+    private boxes: Record<BlockName, Rect>,
     private bezel: Rect,
   ) {
     for (const n of b.build().neurons) this.track(n.id, n);
@@ -197,6 +205,7 @@ class Glue {
   private track(id: string, c: Cell) {
     this.cells.set(id, { x: c.x, y: c.y });
     this.occupied.add(cellKey(c));
+    this.nearCache.clear();
   }
 
   cell(id: string): Cell {
@@ -209,18 +218,23 @@ class Glue {
     return tt(this.cell(a), this.cell(z));
   }
 
+  /** The block a neuron belongs to (by id prefix), if any. */
+  blockOf(id: string): BlockName | undefined {
+    return (Object.keys(PREFIX) as BlockName[]).find((n) => id.startsWith(PREFIX[n]));
+  }
+
   /** Free for a relay: empty, off the screen and its margin, outside every block. */
   free(c: Cell): boolean {
-    return !this.occupied.has(cellKey(c)) && !inRect(c, this.bezel) && !this.boxes.some((r) => inRect(c, r));
+    return !this.occupied.has(cellKey(c)) && !inRect(c, this.bezel) && !Object.values(this.boxes).some((r) => inRect(c, r));
   }
 
   /** A hop may not cross the screen or its margin (their cells' squares). */
   ok = (p: Cell, q: Cell) => !segmentHitsRect(p, q, squares(this.bezel));
 
-  /** Hop cost: its length plus a penalty per neuron it passes over (within 0.45 of the centre). */
-  cost = (p: Cell, q: Cell) => {
+  /** Neurons a hop passes over (within 0.45 of their centre), its ends excepted. */
+  private near(p: Cell, q: Cell): number {
     const k = `${cellKey(p)}>${cellKey(q)}`;
-    let c = this.near.get(k);
+    let c = this.nearCache.get(k);
     if (c === undefined) {
       c = 0;
       for (let x = Math.min(p.x, q.x); x <= Math.max(p.x, q.x); x++)
@@ -228,10 +242,18 @@ class Glue {
           const m = { x, y };
           if ((x !== p.x || y !== p.y) && (x !== q.x || y !== q.y) && this.occupied.has(cellKey(m)) && segmentDistance(p, q, m) < 0.45) c++;
         }
-      this.near.set(k, c);
+      this.nearCache.set(k, c);
     }
-    return Math.hypot(p.x - q.x, p.y - q.y) + 2 * c;
-  };
+    return c;
+  }
+
+  /** Hop cost: length, +4 per neuron passed over, +2 per cell run through a block other than `own`, + a relay's cost. */
+  hopCost(p: Cell, q: Cell, own: ReadonlySet<string>): number {
+    const len = Math.hypot(p.x - q.x, p.y - q.y);
+    let inside = 0;
+    for (const [name, r] of Object.entries(this.boxes)) if (!own.has(name)) inside += len * clipFraction(p, q, squares(r));
+    return len + 4 * this.near(p, q) + 2 * inside + RELAY_COST;
+  }
 
   wire(from: string, to: string | string[]) {
     for (const t of Array.isArray(to) ? to : [to]) {
@@ -241,22 +263,147 @@ class Glue {
     }
   }
 
-  /** Free cells of a rectangle. */
-  region(r: Rect): Cell[] {
+  private own(a: string, z: string): Set<string> {
+    return new Set([this.blockOf(a), this.blockOf(z)].filter((n): n is BlockName => !!n));
+  }
+
+  /** Free cells near both ends (their box, widened by `pad`). */
+  private nodes(a: Cell, z: Cell, pad = 8): Cell[] {
     const out: Cell[] = [];
-    for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++) if (this.free({ x, y })) out.push({ x, y });
+    for (let y = Math.min(a.y, z.y) - pad; y <= Math.max(a.y, z.y) + pad; y++)
+      for (let x = Math.min(a.x, z.x) - pad; x <= Math.max(a.x, z.x) + pad; x++) if (this.free({ x, y })) out.push({ x, y });
     return out;
   }
 
-  /** Relay cells for a line a -> z of exactly `total` ticks, or undefined. */
-  plan(a: string, z: string, total: number, region: Rect, maxRelays = 3): Cell[] | undefined {
-    return searchDelay(this.cell(a), this.cell(z), total, this.region(region), this.ok, maxRelays, this.cost);
+  /** Cheapest route from any of `from` to z (each tick of travel costs `lambda` more): the relay cells after the start, and the start. */
+  route(from: string[], z: string, own: ReadonlySet<string>, avoid: ReadonlySet<string> = new Set(), lambda = 0): { start: string; relays: Cell[] } {
+    const zc = this.cell(z);
+    const starts = from.map((id) => this.cell(id));
+    const nodes = [...starts, ...this.nodes(starts[0]!, zc).filter((c) => !avoid.has(cellKey(c)))];
+    const goal = nodes.length;
+    nodes.push(zc);
+    const dist = nodes.map(() => Infinity);
+    const prev = nodes.map(() => -1);
+    starts.forEach((_, i) => (dist[i] = 0));
+    const done = nodes.map(() => false);
+    for (;;) {
+      let u = -1;
+      for (let i = 0; i < nodes.length; i++) if (!done[i] && dist[i]! < Infinity && (u < 0 || dist[i]! < dist[u]!)) u = i;
+      if (u < 0) throw new Error(`glue: no route to ${z}`);
+      if (u === goal) break;
+      done[u] = true;
+      const p = nodes[u]!;
+      nodes.forEach((q, v) => {
+        if (done[v] || v < starts.length) return;
+        const d = Math.hypot(p.x - q.x, p.y - q.y);
+        if (d > MAX_HOP && v !== goal) return;
+        if (!this.ok(p, q)) return;
+        const c = dist[u]! + this.hopCost(p, q, own) + lambda * tt(p, q);
+        if (c < dist[v]!) [dist[v], prev[v]] = [c, u];
+      });
+    }
+    const path: number[] = [];
+    for (let v = prev[goal]!; v >= starts.length; v = prev[v]!) path.unshift(v);
+    let s = goal;
+    while (prev[s]! >= starts.length) s = prev[s]!;
+    return { start: from[prev[s]!]!, relays: path.map((i) => nodes[i]!) };
   }
 
-  /** Build a planned line (relays named `${name}-1`, ...); returns the relay ids. */
-  build(a: string, z: string, path: Cell[], name: string, label?: string): string[] {
+  /**
+   * Make a route a -> relays -> z exactly `total` ticks long: swap in the
+   * cheapest detour (one relay moved, or one or two inserted into a hop).
+   */
+  pad(a: Cell, relays: Cell[], z: Cell, total: number, own: ReadonlySet<string>, avoid: ReadonlySet<string>, depth = 0): Cell[] | undefined {
+    const pts = [a, ...relays, z];
+    const T = pts.slice(1).reduce((s, q, i) => s + tt(pts[i]!, q), 0);
+    if (T === total) return relays;
+    if (T > total || relays.some((c) => avoid.has(cellKey(c)))) return undefined;
+    const used = new Set([...pts.map(cellKey), ...avoid]);
+    const cost = (seq: Cell[]) => seq.slice(1).reduce((s, q, i) => s + this.hopCost(seq[i]!, q, own), 0);
+    const base = cost(pts);
+    const isOld = (p: Cell, q: Cell) => pts.slice(1).some((r, j) => cellKey(pts[j]!) === cellKey(p) && cellKey(r) === cellKey(q));
+    /** New hops stay short, except the first and last (leaving and entering a block); the route's own hops may be longer. */
+    const valid = (rs: Cell[]) => {
+      const seq = [a, ...rs, z];
+      return seq.slice(1).every((q, i) => this.ok(seq[i]!, q) && (isOld(seq[i]!, q) || i === 0 || i === seq.length - 2 || Math.hypot(seq[i]!.x - q.x, seq[i]!.y - q.y) <= MAX_HOP));
+    };
+    let best: { relays: Cell[]; cost: number } | undefined;
+    const consider = (rs: Cell[]) => {
+      if (!valid(rs)) return;
+      const c = cost([a, ...rs, z]);
+      if (!best || c < best.cost) best = { relays: rs, cost: c };
+    };
+    const extra = total - T;
+    const windowOf = (p: Cell, q: Cell, r: number) => this.nodes(p, q, r).filter((c) => !used.has(cellKey(c)));
+    for (let h = 0; h + 1 < pts.length; h++) {
+      const [p, q] = [pts[h]!, pts[h + 1]!];
+      const need = tt(p, q) + extra;
+      const window = windowOf(p, q, Math.min(MAX_HOP, Math.ceil(extra / 15) + 2));
+      // One relay inserted into hop h.
+      for (const d of window) if (tt(p, d) + tt(d, q) === need) consider([...relays.slice(0, h), d, ...relays.slice(h)]);
+      // Relay h moved (h >= 1 is relay h - 1 of `relays`).
+      if (h >= 1) {
+        const [o, r] = [pts[h - 1]!, pts[h + 1]!];
+        const needMove = tt(o, p) + tt(p, r) + extra;
+        for (const d of window) if (tt(o, d) + tt(d, r) === needMove) consider([...relays.slice(0, h - 1), d, ...relays.slice(h)]);
+      }
+      // Two relays inserted into hop h (small detours only: the search is quadratic).
+      if (!best && extra <= 120)
+        for (const d of window)
+          for (const e of window) if (d !== e && tt(p, d) + tt(d, e) + tt(e, q) === need) consider([...relays.slice(0, h), d, e, ...relays.slice(h)]);
+    }
+    if (best || depth >= 4) return best?.relays;
+    // Too far for one detour: insert the relay that adds the most ticks per unit of cost, then pad the rest.
+    let step: { relays: Cell[]; score: number } | undefined;
+    for (let h = 0; h + 1 < pts.length; h++) {
+      const [p, q] = [pts[h]!, pts[h + 1]!];
+      for (const d of windowOf(p, q, MAX_HOP)) {
+        const gain = tt(p, d) + tt(d, q) - tt(p, q);
+        if (gain < 15 || gain > extra - 15) continue;
+        const rs = [...relays.slice(0, h), d, ...relays.slice(h)];
+        if (!valid(rs)) continue;
+        const score = (cost([a, ...rs, z]) - base) / gain;
+        if (!step || score < step.score) step = { relays: rs, score };
+      }
+    }
+    return step && this.pad(a, step.relays, z, total, own, avoid, depth + 1);
+  }
+
+  /**
+   * Exact taps from one periodic source: each target z gets a line of exactly
+   * `total` ticks from src, branching off the cheapest relay already in the
+   * tree (whose own delay from src is known). Builds them in order.
+   */
+  exactTree(src: string, targets: Array<[string, number, string]>): void {
+    const at = new Map<string, number>([[src, 0]]);
+    for (const [z, total, name] of targets) {
+      let best: { from: string; path: Cell[]; cost: number } | undefined;
+      for (const [from, t0] of at) {
+        const own = this.own(src, z);
+        for (const lambda of [0, 0.05, 0.2, 1]) {
+          const r = this.route([from], z, own, new Set(), lambda);
+          const path = this.pad(this.cell(from), r.relays, this.cell(z), total - t0, own, new Set());
+          if (!path) continue;
+          const pts = [this.cell(from), ...path, this.cell(z)];
+          const cost = pts.slice(1).reduce((s, q, i) => s + this.hopCost(pts[i]!, q, own), 0);
+          if (!best || cost < best.cost) best = { from, path, cost };
+          break;
+        }
+      }
+      if (!best) {
+        const r = this.route([src], z, this.own(src, z));
+        throw new Error(`glue: no ${total}-tick tap ${src} -> ${z}; route ${JSON.stringify(r.relays)} takes ${this.pathTicks(src, r.relays, z)}`);
+      }
+      const relays = this.build(best.from, z, best.path, name);
+      let t = at.get(best.from)!;
+      [best.from, ...relays].forEach((id, k, all) => k > 0 && at.set(id, (t += this.ticks(all[k - 1]!, id))));
+    }
+  }
+
+  /** Build relays (named `${name}-1`, ...) and wire a -> relays -> z; returns the relay ids. */
+  build(a: string, z: string, path: Cell[], name: string): string[] {
     const relays = path.map((c, i) => {
-      const id = this.b.normal(c.x, c.y, 1, { id: `${name}-${i + 1}`, ...(label && i === path.length - 1 ? { label } : {}) });
+      const id = this.b.normal(c.x, c.y, 1, { id: `${name}-${i + 1}` });
       this.track(id, c);
       this.ids.push(id);
       return id;
@@ -266,29 +413,128 @@ class Glue {
     return relays;
   }
 
+  /** A line a -> z of any length in [lo, hi]: the cheapest route that fits, padded up to lo if short. Returns its length. */
+  lineIn(a: string, z: string, lo: number, hi: number, name: string): number {
+    const own = this.own(a, z);
+    for (const lambda of [0, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 3]) {
+      const r = this.route([a], z, own, new Set(), lambda);
+      const T = this.pathTicks(a, r.relays, z);
+      if (T > hi) continue;
+      const path = T >= lo ? r.relays : this.pad(this.cell(a), r.relays, this.cell(z), lo, own, new Set());
+      if (!path) continue;
+      this.build(a, z, path, name);
+      return Math.max(T, lo);
+    }
+    throw new Error(`glue: no line ${a} -> ${z} of ${lo}..${hi} ticks`);
+  }
+
+  /** A line a -> z of exactly `total` ticks: the cheapest route that fits (travel weighted more until one does), padded. */
+  line(a: string, z: string, total: number, name: string): string[] {
+    const own = this.own(a, z);
+    for (const lambda of [0, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 3]) {
+      const r = this.route([a], z, own, new Set(), lambda);
+      const path = this.pad(this.cell(a), r.relays, this.cell(z), total, own, new Set());
+      if (path) return this.build(a, z, path, name);
+    }
+    throw new Error(`glue: no ${total}-tick line ${a} -> ${z}`);
+  }
+
+  private pathTicks(a: string, relays: Cell[], z: string): number {
+    const pts = [this.cell(a), ...relays, this.cell(z)];
+    return pts.slice(1).reduce((s, q, i) => s + tt(pts[i]!, q), 0);
+  }
+
+  /** Cheapest routes for lines a_i -> z_i (avoiding each other), with their travel ticks. */
+  routes(pairs: Array<[string, string, string]>, lambda = 0): Array<{ own: Set<string>; relays: Cell[]; ticks: number }> {
+    const taken = new Set<string>();
+    return pairs.map(([a, z]) => {
+      const own = this.own(a, z);
+      const relays = this.route([a], z, own, taken, lambda).relays;
+      relays.forEach((c) => taken.add(cellKey(c)));
+      return { own, relays, ticks: this.pathTicks(a, relays, z) };
+    });
+  }
+
   /**
-   * Lines from each a_i to z_i, all exactly T ticks: the smallest T >= atLeast
-   * for which every line fits (planned in order, each avoiding the earlier
-   * ones' relays). Builds them; returns T.
+   * Lines a_i -> z_i, all exactly T ticks: the given routes padded (or, if
+   * that fails, routes with travel weighted more). Returns false if none fits.
    */
-  equalLines(pairs: Array<[string, string, string]>, region: Rect, atLeast = 0, maxRelays = 3): number {
-    const lo = Math.max(atLeast, ...pairs.map(([a, z]) => this.ticks(a, z)));
-    for (let T = lo; T < lo + 600; T++) {
+  padLines(pairs: Array<[string, string, string]>, T: number): boolean {
+    for (const lambda of [0, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 3]) {
+      const routes = this.routes(pairs, lambda);
+      const avoid = new Set<string>();
       const paths: Cell[][] = [];
-      const taken = new Set<string>();
-      for (const [a, z] of pairs) {
-        const cands = this.region(region).filter((c) => !taken.has(cellKey(c)));
-        const p = searchDelay(this.cell(a), this.cell(z), T, cands, this.ok, maxRelays, this.cost);
+      for (const [i, [a, z]] of pairs.entries()) {
+        const p = this.pad(this.cell(a), routes[i]!.relays, this.cell(z), T, routes[i]!.own, avoid);
         if (!p) break;
-        p.forEach((c) => taken.add(cellKey(c)));
+        p.forEach((c) => avoid.add(cellKey(c)));
         paths.push(p);
       }
       if (paths.length < pairs.length) continue;
       pairs.forEach(([a, z, name], i) => this.build(a, z, paths[i]!, name));
-      return T;
+      return true;
     }
-    throw new Error(`glue: no equal lines for ${pairs.map((p) => p[2]).join(', ')}`);
+    return false;
   }
+
+  /**
+   * Drive a select plane from two rings: X lines from `xs` (pairs onto the X
+   * ring's fwd/back), Y lines from `ys`, both sources firing at offset `from`.
+   * Picks the move offsets (X as early as its cheapest routes allow, Y as
+   * near its own routes' travel as the skew window allows) and builds the
+   * lines. Returns [moveX, moveY].
+   */
+  movesFor(xs: Array<[string, string, string]>, ys: Array<[string, string, string]>, from: number, rowsRel: number[], colsRel: number[], skew: { min: number; max: number }): [number, number] {
+    // cols - rows = (mX + c_i) - (mY + r_j) must lie in [-skew.max, -skew.min] for all i, j.
+    const dLo = -skew.max - Math.min(...colsRel) + Math.max(...rowsRel);
+    const dHi = -skew.min - Math.max(...colsRel) + Math.min(...rowsRel);
+    if (dLo > dHi) throw new Error('glue: line spreads exceed the skew window');
+    const rx = Math.max(...this.routes(xs).map((r) => r.ticks));
+    const ry = Math.max(...this.routes(ys).map((r) => r.ticks));
+    for (let mX = from + Math.max(rx, ry + dLo); mX < from + rx + 400; mX++) {
+      // Y as close to its own route's travel as the window allows: the least padding.
+      const ys0 = Array.from({ length: dHi - dLo + 1 }, (_, k) => mX - dHi + k).sort((a, b) => Math.abs(a - from - ry) - Math.abs(b - from - ry) || a - b);
+      for (const mY of ys0) {
+        if (mY - from < ry || mX - mY < dLo || mX - mY > dHi) continue;
+        const saved = this.ids.length;
+        if (this.padLines(ys, mY - from)) {
+          if (this.padLines(xs, mX - from)) return [mX, mY];
+          throw new Error(`glue: built Y lines but no X lines at ${mX} (relays from ${saved})`);
+        }
+      }
+    }
+    throw new Error(`glue: no moves for ${xs[0]![2]} / ${ys[0]![2]}`);
+  }
+
+  /** Reach each target from `src` or any relay already built for it (a tree); returns ticks from src to each. */
+  tree(src: string, targets: string[], name: string): number[] {
+    const at = new Map<string, number>([[src, 0]]);
+    return targets.map((z, i) => {
+      const r = this.route([...at.keys()], z, this.own(src, z));
+      const relays = this.build(r.start, z, r.relays, `${name}-${i + 1}`);
+      let t = at.get(r.start)!;
+      [r.start, ...relays].forEach((id, k, all) => {
+        if (k > 0) at.set(id, (t += this.ticks(all[k - 1]!, id)));
+      });
+      return t + this.ticks([r.start, ...relays].at(-1)!, z);
+    });
+  }
+}
+
+/** Fraction of segment p-q inside rectangle r (Liang-Barsky). */
+function clipFraction(p: Cell, q: Cell, r: Rect): number {
+  let [t0, t1] = [0, 1];
+  const [dx, dy] = [q.x - p.x, q.y - p.y];
+  for (const [a, b] of [[-dx, p.x - r.x0], [dx, r.x1 - p.x], [-dy, p.y - r.y0], [dy, r.y1 - p.y]] as const) {
+    if (a === 0) {
+      if (b < 0) return 0;
+    } else {
+      const t = b / a;
+      if (a < 0) t0 = Math.max(t0, t);
+      else t1 = Math.min(t1, t);
+    }
+  }
+  return Math.max(0, t1 - t0);
 }
 
 // ---- the machine -------------------------------------------------------------------
@@ -375,9 +621,6 @@ export interface SideSchedule {
 
 const span = (v: number[]): [number, number] => [Math.min(...v), Math.max(...v)];
 
-/** Where the glue's relays may go: the free cells left of the planes. */
-const GLUE_REGION: Rect = { x0: -10, y0: -4, x1: 19, y1: 72 };
-
 export function buildSnake(opts: SnakeOptions = {}): Snake {
   const F = opts.F ?? 480;
   const start = opts.start ?? { x: 0, y: 3 };
@@ -387,12 +630,7 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   const s0 = LAYOUT.screen;
   const screen: Rect = { x0: s0.x0, y0: s0.y0, x1: s0.x0 + W - 1, y1: s0.y0 + H - 1 };
   const bezel: Rect = { x0: screen.x0 - 1, y0: screen.y0 - 1, x1: screen.x1 + 1, y1: screen.y1 + 1 };
-  const glue = new Glue(b, Object.values(blocksOf(b.build())).map((bl) => bl.box), bezel);
-  const line = (a: string, z: string, total: number, name: string) => {
-    const path = glue.plan(a, z, total, GLUE_REGION);
-    if (!path) throw new Error(`snake: no ${total}-tick line ${a} -> ${z}`);
-    return glue.build(a, z, path, name);
-  };
+  const glue = new Glue(b, Object.fromEntries(Object.entries(blocksOf(b.build())).map(([k, v]) => [k, v.box])) as Record<BlockName, Rect>, bezel);
   const st = ctl.strobes;
   const T0 = ctl.strobeOffset;
 
@@ -402,33 +640,45 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   /** Offsets of the row (or column) fires after the ring's move, per position. */
   const fires = (ring: Ring, inputs: string[]) => ring.lines.map((l, j) => ring.readLag + ring.lineDelay[j]! + glue.ticks(l, inputs[j]!));
 
-  // Head: the Y ring moves as early as it can; the X ring late enough that
-  // every row fires inside the plane's skew window before every column.
-  const hY = T0 + glue.equalLines([[st.down, hy.fwd, 'g-hy-fwd'], [st.up, hy.back, 'g-hy-back']], GLUE_REGION);
+  // Head: the X ring moves as early as its cheapest wiring allows; the Y
+  // ring so that every row fires mid-window before every column.
+  const [hX, hY] = glue.movesFor(
+    [[st.right, hx.fwd, 'g-hx-fwd'], [st.left, hx.back, 'g-hx-back']],
+    [[st.down, hy.fwd, 'g-hy-fwd'], [st.up, hy.back, 'g-hy-back']],
+    T0, fires(hy, hs.rows), fires(hx, hs.cols), hs.skew,
+  );
   const headRows = fires(hy, hs.rows).map((r) => hY + r);
   const headCols = fires(hx, hs.cols);
-  const hX = T0 + glue.equalLines([[st.right, hx.fwd, 'g-hx-fwd'], [st.left, hx.back, 'g-hx-back']], GLUE_REGION, Math.max(...headRows) - hs.skew.max - Math.min(...headCols) - T0);
-  line(ctl.clock, hy.read, hY + hy.readLag, 'g-hy-read');
-  line(ctl.clock, hx.read, hX + hx.readLag, 'g-hx-read');
 
   // Queue: each strobe feeds its lane; shift comes so that the earliest input is exactly on time.
   const lanes = [st.right, st.left, st.down, st.up];
   lanes.forEach((s, l) => glue.wire(s, q.inputs[l]!));
   const inputs = lanes.map((s, l) => T0 + glue.ticks(s, q.inputs[l]!));
-  const shift = Math.min(...inputs) - q.inAt;
-  line(ctl.clock, q.shift, shift, 'g-q-shift');
+  // The shift comes from the frame clock, so that every input is within the queue's tolerance.
+  const shift = glue.lineIn(ctl.clock, q.shift, Math.max(...inputs) - q.tolerance.max, Math.min(...inputs) - q.tolerance.min, 'g-q-shift');
+
+  // The ring reads tap the strobe clock K, which fires every frame 15 ticks before the strobe.
+  const K = `${PREFIX.control}strobe-clock`;
+  const kFire = T0 - glue.ticks(K, st.right);
+  glue.exactTree(K, [
+    [hy.read, hY + hy.readLag - kFire, 'g-hy-read'],
+    [hx.read, hX + hx.readLag - kFire, 'g-hx-read'],
+  ]);
 
   // Tail: driven by the queue outputs (frame k replays frame k - L), read by ANY.
   const out = shift + q.outLag;
-  const tY = out + glue.equalLines([[q.outputs[2]!, ty.fwd, 'g-ty-fwd'], [q.outputs[3]!, ty.back, 'g-ty-back']], GLUE_REGION);
+  const [tX, tY] = glue.movesFor(
+    [[q.outputs[0]!, tx.fwd, 'g-tx-fwd'], [q.outputs[1]!, tx.back, 'g-tx-back']],
+    [[q.outputs[2]!, ty.fwd, 'g-ty-fwd'], [q.outputs[3]!, ty.back, 'g-ty-back']],
+    out, fires(ty, ts.rows), fires(tx, ts.cols), ts.skew,
+  );
   const tailRows = fires(ty, ts.rows).map((r) => tY + r);
   const tailCols = fires(tx, ts.cols);
-  const tX = out + glue.equalLines([[q.outputs[0]!, tx.fwd, 'g-tx-fwd'], [q.outputs[1]!, tx.back, 'g-tx-back']], GLUE_REGION, Math.max(...tailRows) - ts.skew.max - Math.min(...tailCols) - out);
-  line(q.any, ty.read, tY + ty.readLag - out - q.anyLag, 'g-ty-read');
-  line(q.any, tx.read, tX + tx.readLag - out - q.anyLag, 'g-tx-read');
+  glue.line(q.any, ty.read, tY + ty.readLag - out - q.anyLag, 'g-ty-read');
+  glue.line(q.any, tx.read, tX + tx.readLag - out - q.anyLag, 'g-tx-read');
 
-  // Power-on: the control unit's one-shot timer (tick 1) powers every block.
-  for (const p of [hx.power, hy.power, tx.power, ty.power, q.power, hs.power, ts.power]) glue.wire(ctl.power, p);
+  // Power-on: the control unit's one-shot timer (tick 1) powers every block, through a tree of relays.
+  glue.tree(ctl.power, [q.power, hy.power, ty.power, hx.power, tx.power, hs.power, ts.power], 'g-power');
 
   const network = b.build();
   return assemble({ b, network, parts, glue, F, start, screen, bezel, hX, hY, tX, tY, shift, inputs, headRows, headCols, tailRows, tailCols });
