@@ -18,10 +18,10 @@ interface Unit {
   polarity: 1 | -1;
 }
 
-function makeUnit(polarity: 1 | -1, place = polarity === 1 ? HEAD : TAIL): Unit {
+function makeUnit(polarity: 1 | -1, place = polarity === 1 ? HEAD : TAIL, w = W, h = H): Unit {
   const b = new NetworkBuilder();
-  const lamps = buildLamps(b, SCREEN, { w: W, h: H, prefix: 'px' });
-  const sel = buildSelect(b, place, { w: W, h: H, polarity, prefix: polarity === 1 ? 'hd' : 'tl', lamps });
+  const lamps = buildLamps(b, SCREEN, { w, h, prefix: 'px' });
+  const sel = buildSelect(b, place, { w, h, polarity, prefix: polarity === 1 ? 'hd' : 'tl', lamps });
   const net = b.build();
   // Lamps here only count pulses: lift their threshold so they never fire.
   for (const n of net.neurons) if (n.kind === 'lamp') n.threshold = 1e9;
@@ -69,8 +69,8 @@ function run(u: Unit, F: number, frames: Frame[], net = u.net, restOffset = u.se
   while (sim.tick < end) {
     sim.step();
     for (const [x, y] of due.get(sim.tick) ?? []) want[y]![x]! += polarity;
-    for (let y = 0; y < H; y++)
-      for (let x = 0; x < W; x++) {
+    for (let y = 0; y < lamps.length; y++)
+      for (let x = 0; x < lamps[0]!.length; x++) {
         const got = sim.charge(lamps[y]![x]!);
         if (got !== want[y]![x]) return `lamp (${x}, ${y}) holds ${got}, not ${want[y]![x]}, at tick ${sim.tick}`;
       }
@@ -83,6 +83,7 @@ function run(u: Unit, F: number, frames: Frame[], net = u.net, restOffset = u.se
 }
 
 function randomFrames(seed: number, n: number, sel: Select, emptyRate = 0.2): Frame[] {
+  const [W, H] = [sel.cols.length, sel.rows.length];
   const rng = mulberry32(seed);
   return Array.from({ length: n }, () => {
     if (rng() < emptyRate) return null;
@@ -109,6 +110,16 @@ describe.each([1, -1] as const)('select plane, polarity %i', (p) => {
       expect(f).toBeGreaterThanOrEqual(u.sel.minF);
       expect(run(u, f, randomFrames(F === 240 ? 1 : F === 480 ? 2 : 3, 3000, u.sel))).toBeUndefined();
     });
+
+  it('works mirrored left-right, and at another size (6 x 4)', () => {
+    // Mirrored: the plane's local x runs right to left, so plane column i serves pixel column w - 1 - i.
+    const m = makeUnit(p, { x0: 34, y0: p === 1 ? 38 : 29, sx: -1, sy: p });
+    expect(run(m, 480, randomFrames(4, 400, m.sel))).toBeUndefined();
+    const small = makeUnit(p, { x0: 17, y0: p === 1 ? 34 : 29, sx: 1, sy: p }, 6, 4);
+    expect(small.sel.minF).toBeLessThanOrEqual(240);
+    expect(run(small, 240, randomFrames(5, 1000, small.sel))).toBeUndefined();
+    expect(run(small, small.sel.minF, randomFrames(6, 1000, small.sel))).toBeUndefined();
+  });
 
   it('a skew just outside the window misbehaves', () => {
     const u = unit(p);
