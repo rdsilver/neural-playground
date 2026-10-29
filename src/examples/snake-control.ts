@@ -121,9 +121,19 @@ export interface ControlOptions {
   prefix?: string;
 }
 
+/** One wire from a key to a bit input: the neurons it passes (key, relays..., SET or RST source). */
+export interface KeyWire {
+  bit: 'axis' | 'sign';
+  /** true: the key SETs the bit; false: it RSTs it. */
+  set: boolean;
+  path: string[];
+}
+
 export interface ControlUnit {
   /** Key neurons (poke = press). */
   keys: Record<Direction, string>;
+  /** Each key's two wires to the bit inputs (see buildControl: both of a key's bit changes land together). */
+  wiring: Record<Direction, [KeyWire, KeyWire]>;
   /** Strobe neurons: exactly one fires per frame, at `strobeOffset`. */
   strobes: Record<Direction, string>;
   /** The frame Timer (fires at tick 1 + k*F) and the one-shot power-on Timer (tick 1). */
@@ -173,20 +183,59 @@ export function findDelay(a: Cell, to: Cell, total: number, near: Cell, taken: (
   return undefined;
 }
 
+/** AXIS: 1 = vertical. SIGN: 1 = negative (left/up). What each key stores. */
+const KEY_BITS: Record<Direction, { axis: boolean; sign: boolean }> = {
+  up: { axis: true, sign: true },
+  left: { axis: false, sign: true },
+  down: { axis: true, sign: false },
+  right: { axis: false, sign: false },
+};
+const KEY_LABELS: Record<Direction, string> = { left: '◀', up: '▲', down: '▼', right: '▶' };
+/** Key cells (relative to the origin), left to right with a free cell between: ◀ ▲ ▼ ▶. */
+const KEY_CELLS: Record<Direction, Cell> = { left: { x: -3, y: -1 }, up: { x: -1, y: -1 }, down: { x: 1, y: -1 }, right: { x: 3, y: -1 } };
 /**
- * Build the control unit with its top key (▲) at `origin`.
+ * Relay cells on each key's wire to the AXIS input and to the SIGN input:
+ * found by a search for the timing below with no wire over another key
+ * (buildControl checks the timing from the cells).
+ */
+const KEY_RELAYS: Record<Direction, Record<'axis' | 'sign', Cell[]>> = {
+  left: { axis: [{ x: -1, y: 0 }], sign: [{ x: -5, y: 0 }] },
+  up: { axis: [{ x: 2, y: 0 }], sign: [{ x: -4, y: 0 }] },
+  down: { axis: [{ x: 2, y: -1 }, { x: 3, y: 0 }], sign: [{ x: 0, y: -1 }, { x: -1, y: 2 }] },
+  right: { axis: [{ x: 4, y: 0 }], sign: [] },
+};
+
+/**
+ * Build the control unit. `origin` is the cell between the two flip-flops'
+ * SET inputs; the keys sit in a row just above the flip-flops.
  *
- * Layout (cells relative to origin; the SIGN bit is the AXIS bit mirrored):
+ * Layout (cells relative to origin; the SIGN bit is the AXIS bit mirrored;
+ * k = relays on the key wires):
  *
- *     x: -5 ... -2  -1   0 ... 3
- *   y=0   SIGN       ▲   AXIS       keys sit between the two flip-flops:
- *   y=1   flip-      ◀   flip-      ▲ = SET both, ▶ = RST both,
- *   y=2   flop       ▼   flop       ◀ = RST AXIS + SET SIGN, ▼ = SET AXIS + RST SIGN
- *   y=3   + reg G    ▶   + reg G
- *   y=4             R
- *   y=5          D  K  L            decoder: K = strobe clock
- *   y=6          X2 U  X1           X1, X2 = cleanup Inhibitors
- *   y=8              T              frame Timer
+ *     x: -5  -4  -3  -2  -1   0   1   2   3   4
+ *   y=-1          ◀       ▲   k   ▼   k   ▶          keys
+ *   y=0    k   k  SIGN    k   AXIS    k   k   k      ▲ = SET both, ▶ = RST both,
+ *   y=1           flip-       flip-                  ◀ = RST AXIS + SET SIGN,
+ *   y=2           flop    k   flop                   ▼ = SET AXIS + RST SIGN
+ *   y=3     + reg G           + reg G
+ *   y=4                   R
+ *   y=5                D  K  L                       decoder: K = strobe clock
+ *   y=6                X2 U  X1                      X1, X2 = cleanup Inhibitors
+ *   y=8                   T                          frame Timer
+ *
+ * Key timing. A key that changes both bits (◀ after ▼, ▼ after ◀, ▲ after
+ * ▶, ▶ after ▲) must change them on the same side of a read: otherwise the
+ * decoder sees, for one frame, a direction nobody pressed (▶ between ◀ and
+ * ▼, say). A change counts at a read at tick T if a SET's +1 lands on the
+ * register at or before T, a RST's -1 strictly before T (see buildBit). SET
+ * lands 34 ticks after its gate, RST 30, so a key's two changes count at the
+ * same reads exactly when each of its RST wires is 3 ticks longer than its
+ * SET wires (▲, ▶: two equal wires). The relay paths in KEY_RELAYS do that,
+ * and the keys are about equally fast (78 to 97 ticks to a bit input), so
+ * of two presses far enough apart the later one wins. No key wire passes
+ * over another key. Every wire is slow enough that a press at tick 0
+ * reaches its gate after power-on has dug the hole. buildControl checks
+ * the timing from the cells.
  */
 export function buildControl(b: NetworkBuilder, origin: Cell, opts: ControlOptions): ControlUnit {
   const F = opts.F;
@@ -195,13 +244,23 @@ export function buildControl(b: NetworkBuilder, origin: Cell, opts: ControlOptio
   const axis = buildBit(b, { x0: origin.x, y0: origin.y + 3, sx: 1, sy: -1 }, `${pre}-axis`);
   const sign = buildBit(b, { x0: origin.x - 2, y0: origin.y + 3, sx: -1, sy: -1 }, `${pre}-sign`);
 
-  const key = (d: Direction, label: string, y: number) => b.normal(P(-1, y).x, P(-1, y).y, 1, { id: `${pre}-key-${d}`, label });
-  const keys: Record<Direction, string> = { up: key('up', '▲', 0), left: key('left', '◀', 1), down: key('down', '▼', 2), right: key('right', '▶', 3) };
-  // AXIS: 1 = vertical. SIGN: 1 = negative (left/up).
-  b.connect(keys.up, [axis.setSource, sign.setSource]);
-  b.connect(keys.left, [axis.resetSource, sign.setSource]);
-  b.connect(keys.down, [axis.setSource, sign.resetSource]);
-  b.connect(keys.right, [axis.resetSource, sign.resetSource]);
+  const keys = {} as Record<Direction, string>;
+  for (const d of ['left', 'up', 'down', 'right'] as const) {
+    const c = P(KEY_CELLS[d].x, KEY_CELLS[d].y);
+    keys[d] = b.normal(c.x, c.y, 1, { id: `${pre}-key-${d}`, label: KEY_LABELS[d] });
+  }
+  const wiring = {} as Record<Direction, [KeyWire, KeyWire]>;
+  for (const d of ['up', 'left', 'down', 'right'] as const) {
+    const wire = (bit: 'axis' | 'sign'): KeyWire => {
+      const set = KEY_BITS[d][bit];
+      const ids = bit === 'axis' ? axis : sign;
+      const relays = KEY_RELAYS[d][bit].map((r, i) => b.normal(P(r.x, r.y).x, P(r.x, r.y).y, 1, { id: `${pre}-wire-${d}-${bit}-${i + 1}` }));
+      const path = [keys[d], ...relays, set ? ids.setSource : ids.resetSource];
+      b.chain(path);
+      return { bit, set, path };
+    };
+    wiring[d] = [wire('axis'), wire('sign')];
+  }
 
   // Decoder branches (threshold 1). Resting charges: right 0, left -1,
   // down -1, up -2: the "bit is 0" rails are folded in as a bias.
@@ -242,5 +301,42 @@ export function buildControl(b: NetworkBuilder, origin: Cell, opts: ControlOptio
   const delay = path.map((c, i) => b.normal(c.x, c.y, 1, { id: `${pre}-strobe-delay-${i + 1}` }));
   b.chain([axis.readSource, ...delay, k]);
   const strobeOffset = kFire + tt(k, strobes.right);
-  return { keys, strobes, clock, power, bits: { axis, sign }, F, readOffset, strobeOffset };
+  checkKeyTiming(tt, power, { axis, sign }, wiring);
+  return { keys, wiring, strobes, clock, power, bits: { axis, sign }, F, readOffset, strobeOffset };
+}
+
+/** Ticks from a press to the read at which it counts, and from power-on to the hole, measured on the cells (see buildControl). */
+export function keyTiming(tt: (a: string, c: string) => number, power: string, bits: { axis: BitIds; sign: BitIds }, wiring: Record<Direction, [KeyWire, KeyWire]>) {
+  const pathTicks = (path: string[]) => path.slice(1).reduce((s, id, i) => s + tt(path[i]!, id), 0);
+  /** Source to gate: the +1 and -1 halves of the pair arrive together. */
+  const gateLag = (src: string, gate: string, half: string) => tt(src, half) + tt(half, gate);
+  const lags = Object.fromEntries((['axis', 'sign'] as const).map((bit) => {
+    const ids = bits[bit];
+    const name = ids.register.slice(0, -'-register'.length);
+    const setGate = gateLag(ids.setSource, ids.setGate, `${name}-set-plus`);
+    const resetGate = gateLag(ids.resetSource, ids.resetGate, `${name}-reset-plus`);
+    if (setGate !== gateLag(ids.setSource, ids.setGate, `${name}-set-minus`) || resetGate !== gateLag(ids.resetSource, ids.resetGate, ids.resetMinus)) throw new Error('control: a press pair splits');
+    // A SET counts at reads at or after its landing; a RST's -1 at reads strictly after.
+    const counts = { set: setGate + tt(ids.setGate, ids.register), reset: resetGate + tt(ids.resetGate, `${name}-reset-register`) + tt(`${name}-reset-register`, ids.register) + 1 };
+    const hole = 1 + tt(power, ids.resetMinus) + tt(ids.resetMinus, ids.resetGate);
+    return [bit, { setGate, resetGate, counts, hole }];
+  })) as Record<'axis' | 'sign', { setGate: number; resetGate: number; counts: { set: number; reset: number }; hole: number }>;
+  const keys = Object.fromEntries(DIRECTIONS.map((d) => {
+    const wires = wiring[d].map((w) => {
+      const l = lags[w.bit];
+      const delay = pathTicks(w.path);
+      return { ...w, delay, counts: delay + (w.set ? l.counts.set : l.counts.reset), gate: delay + (w.set ? l.setGate : l.resetGate) };
+    });
+    return [d, wires];
+  })) as Record<Direction, Array<KeyWire & { delay: number; counts: number; gate: number }>>;
+  return { lags, keys };
+}
+
+function checkKeyTiming(...args: Parameters<typeof keyTiming>): void {
+  const { lags, keys } = keyTiming(...args);
+  for (const d of DIRECTIONS) {
+    const [a, s] = keys[d];
+    if (a!.counts !== s!.counts) throw new Error(`control: key ${d} changes AXIS at read +${a!.counts} but SIGN at +${s!.counts}`);
+    for (const w of keys[d]) if (w.gate <= lags[w.bit].hole) throw new Error(`control: a ${d} press at tick 0 reaches the ${w.bit} gate before power-on's hole`);
+  }
 }

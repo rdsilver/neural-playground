@@ -1,5 +1,5 @@
 import { travelTicks, type Network } from '../engine';
-import type { ControlUnit, Direction } from './snake-control';
+import { DIRECTIONS, keyTiming, type ControlUnit, type Direction } from './snake-control';
 
 /**
  * Reference models of the Neural Snake, shared by the tests (no test code
@@ -76,20 +76,44 @@ export interface ControlFacts {
   /** Ticks from a frame clock fire (tick 1 + kF) to the read of both registers. */
   readOffset: number;
   wiring: KeyWiring;
+  /**
+   * Ticks from a key press to the first read it counts at: both of a key's
+   * bit changes count from the same read on (buildControl's key timing).
+   */
+  counts: Record<Direction, number>;
+  /** Of two presses at least this many ticks apart, the later always wins (no reordering, no closed gate). */
+  gap: number;
 }
 
-/** Read a control unit's key wiring off a built network. */
+/** Read a control unit's key wiring off a built network: each wire's travel through its relays. */
 export function controlFacts(net: Network, ctl: ControlUnit): ControlFacts {
   const at = new Map(net.neurons.map((n) => [n.id, n]));
-  const d = (a: string, c: string) => travelTicks(at.get(a)!, at.get(c)!);
-  const { axis, sign } = ctl.bits;
-  const wiring: KeyWiring = {
-    up: [{ bit: 'axis', set: true, delay: d(ctl.keys.up, axis.setSource) }, { bit: 'sign', set: true, delay: d(ctl.keys.up, sign.setSource) }],
-    left: [{ bit: 'axis', set: false, delay: d(ctl.keys.left, axis.resetSource) }, { bit: 'sign', set: true, delay: d(ctl.keys.left, sign.setSource) }],
-    down: [{ bit: 'axis', set: true, delay: d(ctl.keys.down, axis.setSource) }, { bit: 'sign', set: false, delay: d(ctl.keys.down, sign.resetSource) }],
-    right: [{ bit: 'axis', set: false, delay: d(ctl.keys.right, axis.resetSource) }, { bit: 'sign', set: false, delay: d(ctl.keys.right, sign.resetSource) }],
-  };
-  return { F: ctl.F, readOffset: ctl.readOffset, wiring };
+  const ticks = (path: string[]) => path.slice(1).reduce((s, id, i) => s + travelTicks(at.get(path[i]!)!, at.get(id)!), 0);
+  const wiring = Object.fromEntries(Object.entries(ctl.wiring).map(([d, wires]) => [d, wires.map((w) => ({ bit: w.bit, set: w.set, delay: ticks(w.path) }))])) as KeyWiring;
+  const tt = (a: string, c: string) => travelTicks(at.get(a)!, at.get(c)!);
+  const { keys } = keyTiming(tt, ctl.power, ctl.bits, ctl.wiring);
+  const counts = Object.fromEntries(DIRECTIONS.map((d) => [d, keys[d][0]!.counts])) as Record<Direction, number>;
+  const all = DIRECTIONS.flatMap((d) => keys[d]);
+  const spread = (v: number[]) => Math.max(...v) - Math.min(...v);
+  // A gate opens 15 ticks after the other gate's news; and a later press must count no earlier.
+  const gap = Math.max(15 + spread(all.map((w) => w.gate)), spread(Object.values(counts))) + 1;
+  return { F: ctl.F, readOffset: ctl.readOffset, wiring, counts, gap };
+}
+
+/**
+ * The player's view of the control unit, independent of the bit model: for
+ * presses at least facts.gap ticks apart, each frame's strobe is the key of
+ * the latest press that counts by that frame's read (RIGHT before any).
+ */
+export function intentModel(frames: number, presses: KeyPress[], facts: ControlFacts): Direction[] {
+  const sorted = [...presses].sort((a, b) => a.t - b.t);
+  sorted.forEach((p, i) => {
+    if (i > 0 && p.t - sorted[i - 1]!.t < facts.gap) throw new Error(`intentModel: presses at ${sorted[i - 1]!.t} and ${p.t} are closer than ${facts.gap} ticks`);
+  });
+  return Array.from({ length: frames }, (_, k) => {
+    const read = 1 + k * facts.F + facts.readOffset;
+    return sorted.filter((p) => p.t + facts.counts[p.key] <= read).at(-1)?.key ?? 'right';
+  });
 }
 
 /** Expected strobe direction per frame (throws Ambiguous on an undecided tie). */

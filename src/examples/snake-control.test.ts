@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { NetworkBuilder, Simulation } from '../engine';
 import { mulberry32 } from '../engine/rng';
 import { buildBit, buildControl, DIRECTIONS, type Direction } from './snake-control';
-import { Ambiguous, bitModel, controlFacts, controlModel, disambiguate, type KeyPress, type Press } from './snake-model';
+import { Ambiguous, bitModel, controlFacts, controlModel, disambiguate, intentModel, type KeyPress, type Press } from './snake-model';
 
 // ---- bit (flip-flop + register) ------------------------------------------------
 
@@ -76,6 +76,13 @@ describe('bit (flip-flop + register)', () => {
 // ---- control unit ------------------------------------------------------------
 
 const F_VALUES = [64, 75, 90, 120];
+
+/** Distance from point p to segment a-b. */
+function distanceToSegment(a: { x: number; y: number }, b: { x: number; y: number }, p: { x: number; y: number }): number {
+  const [dx, dy] = [b.x - a.x, b.y - a.y];
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+}
 const RESTS: Record<Direction, number> = { right: 0, left: -1, down: -1, up: -2 };
 
 function makeControl(F: number) {
@@ -124,8 +131,24 @@ describe('control unit', () => {
         for (const key of DIRECTIONS) {
           const presses: KeyPress[] = [{ t: 40, key: from }];
           for (let p = 0; p < F; p++) presses.push({ t: 400 + p * 4 * F + p, key }, { t: 400 + p * 4 * F + 2 * F, key: from });
-          checkControl(F, 4 * F + 8, disambiguate(4 * F + 8, presses, unit.facts), unit);
+          const { seen } = checkControl(F, 4 * F + 8, disambiguate(4 * F + 8, presses, unit.facts), unit);
+          // Never a direction nobody pressed: a key that changes both bits changes them at the same read.
+          expect(seen.filter((s) => s.tick > 400 && s.d !== from && s.d !== key), `${from} -> ${key}`).toEqual([]);
         }
+    });
+
+    it(`F=${F}: of presses at least facts.gap apart the later always wins (intent model)`, () => {
+      const unit = makeControl(F);
+      for (const seed of [11, 12, 13]) {
+        const rng = mulberry32(seed);
+        const frames = 300;
+        const presses: KeyPress[] = [];
+        for (let t = Math.floor(rng() * 20); t < frames * F; t += unit.facts.gap + Math.floor(rng() * 2 * F)) presses.push({ t, key: DIRECTIONS[Math.floor(rng() * 4)]! });
+        const want = intentModel(frames, presses, unit.facts);
+        expect(controlModel(frames, presses, unit.facts)).toEqual(want);
+        const { seen } = checkControl(F, frames, presses, unit);
+        expect(seen.map((s) => s.d)).toEqual(want);
+      }
     });
 
     it(`F=${F}: random bursts (same-tick and many-per-frame presses)`, () => {
@@ -165,6 +188,44 @@ describe('control unit', () => {
         expect(kept.length).toBeGreaterThan(presses.length * 0.98);
         checkControl(F, frames, kept, unit);
       }
+  });
+
+  it('key timing: each key changes both bits at the same read; keys within 16 ticks of each other', () => {
+    const { ctl, net, facts } = makeControl(90);
+    expect(facts.counts).toEqual({ up: 142, left: 143, down: 146, right: 158 });
+    expect(facts.gap).toBe(35);
+    expect(facts.wiring).toEqual({
+      up: [{ bit: 'axis', set: true, delay: 78 }, { bit: 'sign', set: true, delay: 78 }],
+      left: [{ bit: 'axis', set: false, delay: 82 }, { bit: 'sign', set: true, delay: 79 }],
+      down: [{ bit: 'axis', set: true, delay: 82 }, { bit: 'sign', set: false, delay: 85 }],
+      right: [{ bit: 'axis', set: false, delay: 97 }, { bit: 'sign', set: false, delay: 97 }],
+    });
+    // No wire of the unit passes over a key (that is not one of its ends).
+    const at = new Map(net.neurons.map((n) => [n.id, n] as const));
+    const keyIds = new Set(Object.values(ctl.keys));
+    const over = net.connections.flatMap((c) => {
+      const [a, z] = [at.get(c.from)!, at.get(c.to)!];
+      return [...keyIds].filter((k) => k !== c.from && k !== c.to && distanceToSegment(a, z, at.get(k)!) < 0.5).map((k) => `${c.from} -> ${c.to} over ${k}`);
+    });
+    expect(over).toEqual([]);
+    // The strobe schedule is unchanged by the key wiring.
+    expect([ctl.readOffset, ctl.strobeOffset]).toEqual([108, 178]);
+  });
+
+  it("every pair of presses during power-on (ticks 1..40) matches the model", { timeout: 120_000 }, () => {
+    const F = 90;
+    const unit = makeControl(F);
+    let [pairs, checked] = [0, 0];
+    for (const k1 of DIRECTIONS)
+      for (const k2 of DIRECTIONS)
+        for (let t1 = 1; t1 <= 40; t1 += 2)
+          for (let t2 = t1; t2 <= 40; t2 += 3) {
+            const presses = disambiguate(8, [{ t: t1, key: k1 }, { t: t2, key: k2 }], unit.facts);
+            pairs++;
+            if (presses.length === 2) checked++;
+            checkControl(F, 8, presses, unit);
+          }
+    expect(checked).toBeGreaterThan(pairs * 0.95);
   });
 
   it('presses during power-on (ticks 0..80) are safe', () => {
