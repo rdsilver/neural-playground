@@ -35,6 +35,17 @@ import { at, type Cell, type Place } from './snake-control';
  * ANY: each last stage also drives a relay A_l, and the four A_l sit at
  * distance sqrt(5) from ANY, so ANY fires anyLag after any output.
  *
+ * Integration: if a strobe fired at T reaches inputs[l] at T + w_in = shift
+ * + inAt, outputs[l] fires at T + depth*F + w_in: the strobe of `depth`
+ * frames later plus the same wire w_in (not at that strobe itself). A tail
+ * ring wants read at fwd/back + readLag, so ANY -> read must be (readLag -
+ * anyLag) ticks longer than outputs -> fwd/back. On the board the queued
+ * moves are the stage cells WITHOUT the red negative-charge ring (holes are
+ * -1, tokens 0). A holder fires on the pair's +1 (reset to 0) and the -1
+ * makes it a hole, so hole = -1 and token = threshold - 1; one +1 hand-off
+ * must turn a hole into a token, so threshold = 1 and token = 0. A positive
+ * token would need threshold 2 and a second hand-off pulse (a relay) per stage.
+ *
  * Local layout (x right, y down; P at the origin; depth 4, 4 lanes):
  *
  *     x: -2  -1   0   1   2
@@ -58,7 +69,7 @@ import { at, type Cell, type Place } from './snake-control';
  *   input fires, for an exact depth*F delay        34               inAt (= inWindow)
  *   input +1 lands on stage 0                      79 inner, 94 outer lanes
  *   ANY fires (if an output fired)                 83               outLag + anyLag (49)
- *   settled moment: all at rest (restFor)          94               settle
+ *   settled moment: all landed, at rest (restFor)  94               settle
  *   input offsets that still queue for depth       32 .. F+8        tolerance
  *   smallest frame period                          61               minF
  *   power fires before the first shift by >=       1                powerLead
@@ -87,7 +98,11 @@ export interface Queue {
   outputs: string[];
   /** Fire every frame (period F). */
   shift: string;
-  /** Fires once per output fire, anyLag ticks after it (the tail rings' read clock). */
+  /**
+   * Fires once per output fire, anyLag ticks after it (the tail rings' read
+   * clock). A ring wants read at fwd/back + readLag, so the wire ANY -> read
+   * must be (readLag - anyLag) ticks longer than the wires outputs -> fwd/back.
+   */
   any: string;
   /** Fire once, at least powerLead ticks before the first shift. */
   power: string;
@@ -97,7 +112,11 @@ export interface Queue {
   /** Ticks from an input fire (inside inWindow) to its output fire: depth*F. */
   delay: number;
   anyLag: number;
-  /** At shift fire + settle every neuron is at rest (restFor) until the next frame's pair lands. */
+  /**
+   * With the input at inAt: at shift fire + settle every pulse the frame sent
+   * inside the block has landed (ANY's +1 included) and every neuron is at
+   * rest (restFor) until the next frame's pair lands.
+   */
   settle: number;
   /**
    * Resting charge of every neuron at the settled moment. queued[d] is the
@@ -117,6 +136,12 @@ export interface Queue {
    * input later than inAt may land after `settle` (the settled moment moves).
    */
   tolerance: { min: number; max: number };
+  /**
+   * Per lane: ticks from inputs[l] firing to its +1 landing on stage 0. An
+   * input at offset w settles at w + inTravel[l]; when that is later than
+   * `settle`, it is that frame's settled moment instead.
+   */
+  inTravel: number[];
   /** Stage cells per lane, stage 0 first (for tests and probes). */
   stages: string[][];
 }
@@ -156,6 +181,8 @@ interface QueueTiming {
   powerLead: number;
   /** Input offsets that queue correctly: min .. maxMinusF + F. */
   tolerance: { min: number; maxMinusF: number };
+  /** Per lane: ticks from an input fire to its +1 landing on stage 0. */
+  inTravel: number[];
 }
 
 /** An arrival: tick (after shift) and the tick its pulse was created; earlier-created lands first on a tie. */
@@ -182,6 +209,7 @@ function queueTiming(lanes: number, depth: number, cells: Map<string, Cell>): Qu
   let minF = 0;
   let tolMin = -Infinity;
   let tolMax = Infinity;
+  const inTravel: number[] = [];
   for (let l = 0; l < lanes; l++)
     for (let d = 0; d < depth; d++) {
       const [p, m] = [plus(l, d), minus(l, d)];
@@ -192,19 +220,31 @@ function queueTiming(lanes: number, depth: number, cells: Map<string, Cell>): Qu
         if (!after(token, m)) throw new Error(`queue: token lands on ${s(l, d)} inside its pair`);
       } else {
         const a0 = t(`in${l}`, s(l, 0));
-        token = [outLag + a0, outLag];
-        // Input offsets w that work: the input lands after this frame's pair
-        // -1 and no later than the next frame's pair +1 (tick F + p; on that
-        // tie either order fires stage 0 on the beat).
-        let w = m[0] - a0;
-        while (!after([w + a0, w], m)) w++;
-        tolMin = Math.max(tolMin, w);
-        tolMax = Math.min(tolMax, p[0] - a0); // + F
-        if (!after(token, m)) return undefined;
+        inTravel.push(a0);
+        // An input fired w ticks after a shift lands on stage 0 at w + a0
+        // (created at w). It queues for exactly `depth` frames when
+        // - it lands after this frame's pair -1 (else the pair cancels it or
+        //   it fires a frame early), and
+        // - it lands by the next frame's pair +1 tick (F + p) and before that
+        //   pair's -1 (F + m): then stage 0 fires on that beat, whether the
+        //   input lands just before or just after the +1. If p = m (e.g. the
+        //   inner lanes at depth 4: both at 77) an input landing on that tick
+        //   after both pair pulses (created later) misses the beat.
+        // Both conditions are monotone in w; scan to the edge with `after`.
+        const lands = (w: number): Arrival => [w + a0, w];
+        let lo = m[0] - a0 - 1;
+        while (!after(lands(lo), m)) lo++;
+        let hi = p[0] - a0; // relative to the next shift (w - F)
+        while (!after(m, lands(hi))) hi--;
+        tolMin = Math.max(tolMin, lo);
+        tolMax = Math.min(tolMax, hi);
+        if (!after(token = lands(outLag), m)) return undefined;
       }
       settle = Math.max(settle, m[0], token[0]);
       minF = Math.max(minF, token[0] - p[0] + 1, m[0] - p[0] + 1);
     }
+  // ANY's +1 is the frame's last internal arrival when the stages settle earlier (depth <= 3).
+  settle = Math.max(settle, outLag + anys[0]!);
   const firstPlus = Math.min(...Array.from({ length: lanes }, (_, l) => Array.from({ length: depth }, (_, d) => plus(l, d)[0])).flat());
   minF = Math.max(minF, settle - firstPlus + 1);
   // Power's -1 hole must land before the first pair's +1: power fires `lead`
@@ -216,7 +256,7 @@ function queueTiming(lanes: number, depth: number, cells: Map<string, Cell>): Qu
       const h = t('power', s(l, d)) - plus(l, d)[0];
       powerLead = Math.max(powerLead, h > 0 ? h : h + 1);
     }
-  return { outLag, anyLag: anys[0]!, settle, minF, powerLead, tolerance: { min: tolMin, maxMinusF: tolMax } };
+  return { outLag, anyLag: anys[0]!, settle, minF, powerLead, tolerance: { min: tolMin, maxMinusF: tolMax }, inTravel };
 }
 
 export function buildQueue(b: NetworkBuilder, place: Place, opts: QueueOptions): Queue {
@@ -255,6 +295,6 @@ export function buildQueue(b: NetworkBuilder, place: Place, opts: QueueOptions):
     outputs: stages.map((lane) => lane[depth - 1]!),
     shift: id('shift'), any: id('any'), power: id('power'), powerLead: T.powerLead,
     inWindow: { min: T.outLag, max: T.outLag }, delay: depth * F, anyLag: T.anyLag, settle: T.settle, restFor, minF: T.minF,
-    inAt: T.outLag, outLag: T.outLag, tolerance: { min: T.tolerance.min, max: T.tolerance.maxMinusF + F }, stages,
+    inAt: T.outLag, outLag: T.outLag, tolerance: { min: T.tolerance.min, max: T.tolerance.maxMinusF + F }, inTravel: T.inTravel, stages,
   };
 }
