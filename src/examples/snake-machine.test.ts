@@ -11,22 +11,39 @@ const factsOf = (s: Snake) => factsCache.get(s) ?? factsCache.set(s, controlFact
 const facts = factsOf(snake);
 const F = snake.F;
 const L = 4;
-/** Most pulses ever in flight at once (the long run measures 177). */
-const MAX_PULSES = 200;
+/**
+ * Pulses in flight, split by source. The key paths (keys, key wires, each
+ * bit's SET/RST sources, pair halves, gates and RST Inhibitor) carry at most
+ * PER_PRESS pulses per press at once (two wires, each at most a pair or a
+ * gate's two outputs in flight), for at most keyWindow() ticks after it:
+ * that part grows with how hard the keys are mashed and has no fixed cap.
+ * Everything else (the machine) runs once per frame whatever the keys do: it
+ * never has more than MACHINE_PULSES in flight (the most the runs below
+ * reach, pinned).
+ */
+const PER_PRESS = 4;
+/** The longest a frame shows 3 or 5 pixels: the schedule's bound, and what a 300-frame random run reaches. */
+const PIXEL_MOMENTS = { bound: { 3: 75, 5: 74 }, longest: { 3: 51, 5: 53 } };
+const MACHINE_PULSES = 185;
+const KEY_PATH = /^ctl-(key-|wire-|(axis|h|v)-(set|reset)(-plus|-minus|-gate|-register)?$)/;
+/** Ticks a press's pulses can stay in flight: its longest wire, the pair (30 to the gate) and SET's 34 to the register. */
+const keyWindow = (s: Snake) => Math.max(...Object.values(factsOf(s).wiring).flatMap((ws) => ws.map((w) => w.delay))) + 30 + 34 + 1;
 /** Glue: every connection not internal to a block, and every relay outside the blocks. */
-const GLUE_CONNECTIONS = 99;
-const GLUE_NEURONS = 39;
-const BUDGET = { neurons: 1173, connections: 2612, size: [43, 66] };
+const GLUE_CONNECTIONS = 105;
+const GLUE_NEURONS = 45;
+const BUDGET = { neurons: 1203, connections: 2635, size: [43, 66] };
+/** Glue hops other than the ring line bundles: how many, neurons passed over in all, block corners clipped. */
+const TIDY = { hops: 69, over: 101, clips: 11 };
 /** Latencies in ticks (see Snake.latency). */
-const LATENCY = { strobeToLamp: [1368, 1442], pressToStrobe: [212, 707], pressToLampMin: 1580, pressToLampMax: 2149 };
+const LATENCY = { strobeToLamp: [1426, 1500], pressToStrobe: [269, 774], pressToLampMin: 1695, pressToLampMax: 2274 };
 /** The frame schedule: the table in buildSnake(), ticks after frameTick(k). */
 const SCHEDULE: Snake['schedule'] = {
-  strobe: 178,
-  head: { moveX: 636, moveY: 403, readX: 714, readY: 485, linesX: 1021, linesY: 746, cols: [1287, 1320], rows: [1001, 1041], skew: [-319, -246], window: [-323, -180], lamp: [1546, 1620], q: [1410, 1472] },
-  tail: { moveX: 684, moveY: 434, readX: 762, readY: 516, linesX: 1069, linesY: 777, cols: [1335, 1368], rows: [1053, 1081], skew: [-315, -254], window: [-318, -173], lamp: [1594, 1669], q: [1457, 1521] },
-  queue: { shift: 170, inputs: [273, 340], outputs: 204, any: 253 },
-  lamps: [1546, 1669],
-  powerSlack: { headX: 162, headY: 133, tailX: 1991, tailY: 2052, queue: 13, headSelect: 377, tailSelect: 2084 },
+  strobe: 238,
+  head: { moveX: 754, moveY: 587, readX: 832, readY: 669, linesX: 1139, linesY: 930, cols: [1405, 1438], rows: [1185, 1225], skew: [-253, -180], window: [-323, -180], lamp: [1664, 1738], q: [1528, 1590] },
+  tail: { moveX: 753, moveY: 506, readX: 831, readY: 588, linesX: 1138, linesY: 849, cols: [1404, 1437], rows: [1125, 1153], skew: [-312, -251], window: [-318, -173], lamp: [1663, 1738], q: [1526, 1590] },
+  queue: { shift: 315, inputs: [362, 431], outputs: 349, any: 398 },
+  lamps: [1663, 1738],
+  powerSlack: { headX: 247, headY: 371, tailX: 2173, tailY: 2270, queue: 239, headSelect: 490, tailSelect: 2271 },
 };
 
 interface RunOptions {
@@ -38,6 +55,10 @@ interface RunResult {
   error?: string;
   /** Most pulses in flight at once. */
   maxPulses: number;
+  /** Most of the machine's own pulses (not on a key path) in flight at once. */
+  machinePulses: number;
+  /** Most key-path pulses in flight minus PER_PRESS per press in the last keyWindow() ticks (never above 0). */
+  keyExcess: number;
   /** The model's direction per frame. */
   dirs: Direction[];
   /** Per frame (when the head enters a pixel the tail is not leaving): tick its lamp's charge rose. */
@@ -84,6 +105,11 @@ function run(s: Snake, frames: number, presses: KeyPress[], opts: RunOptions = {
   const watch = new Map<string, [number, number]>();
   const end = s.settledTick(frames - 1);
   let maxPulses = 0;
+  let machinePulses = 0;
+  let keyExcess = -Infinity;
+  const window = keyWindow(s);
+  const pressTicks = presses.map((p) => p.t).sort((a, b) => a - b);
+  let [pIn, pOut] = [0, 0];
   const pulsesByFrame: number[] = [];
   /** Frame k whose window [c_k + lo, c_k + hi] holds tick, or -1. */
   const frameOf = (tick: number, [lo, hi]: [number, number]) => {
@@ -118,8 +144,15 @@ function run(s: Snake, frames: number, presses: KeyPress[], opts: RunOptions = {
         headRise.set(k, sim.tick);
         watch.delete(lamp);
       }
-    const inFlight = sim.pulses().length;
+    const pulses = sim.pulses();
+    const inFlight = pulses.length;
     maxPulses = Math.max(maxPulses, inFlight);
+    let keyed = 0;
+    for (const q of pulses) if (KEY_PATH.test(q.from)) keyed++;
+    while (pIn < pressTicks.length && pressTicks[pIn]! <= sim.tick) pIn++;
+    while (pOut < pIn && pressTicks[pOut]! <= sim.tick - window) pOut++;
+    machinePulses = Math.max(machinePulses, inFlight - keyed);
+    keyExcess = Math.max(keyExcess, keyed - PER_PRESS * (pIn - pOut));
     const fk = Math.floor((sim.tick - 1) / F);
     pulsesByFrame[fk] = Math.max(pulsesByFrame[fk] ?? 0, inFlight);
     const k = settled.get(sim.tick);
@@ -139,7 +172,7 @@ function run(s: Snake, frames: number, presses: KeyPress[], opts: RunOptions = {
         if (!ok.includes(got)) error ??= `${p.block}: ${id} holds ${got}, not ${ok.join('/')}, at tick ${sim.tick}`;
       }
   }
-  return { error, maxPulses, dirs: dirs.slice(0, frames), headRise, visited, pulsesByFrame };
+  return { error, maxPulses, machinePulses, keyExcess, dirs: dirs.slice(0, frames), headRise, visited, pulsesByFrame };
 }
 
 /** Random presses from tick 1 (power-on included): bursts of 1-4 keys (some on the same tick), gaps up to 3 frames; ambiguous ties dropped. */
@@ -182,12 +215,12 @@ describe('snake machine: behaviour', () => {
 
   /**
    * Every turn (12 pairs), pressed at every tick from 12 before its cutoff
-   * to 30 after (where a key that changes both bits could show a third
-   * direction for a frame) and at 26 phases across the whole frame. One run
-   * per pair: moving `from`, press `to` at cutoff + o, back to `from` two
-   * frames later. The turn shows at exactly the predicted frame (the slot's
-   * frame if o <= 0, the next if o > 0), and no frame ever goes a direction
-   * other than `from` or `to`.
+   * to 30 after (where a key whose two bit changes counted at different
+   * reads would show a third direction for a frame) and at 26 phases across
+   * the whole frame. One run per pair: moving `from`, press `to` at
+   * cutoff + o, back to `from` two frames later. The turn shows at exactly
+   * the predicted frame (the slot's frame if o <= 0, the next if o > 0), and
+   * no frame ever goes a direction other than `from` or `to`.
    */
   it('every turn, at every phase near its cutoff and across the frame: the predicted frame, never a third direction', { timeout: 120_000 }, () => {
     let turns = 0;
@@ -234,7 +267,28 @@ describe('snake machine: behaviour', () => {
       expect(new Set(r.dirs)).toEqual(new Set(DIRECTIONS));
     });
 
-  it('between settled moments the snake shows 5 pixels for at most 123 ticks a frame, or 3 for at most 26', { timeout: 60_000 }, () => {
+  /**
+   * Two keys pressed together (the same tick, or a few ticks apart) while
+   * moving: whichever change wins on each bit, the snake only ever goes the
+   * way it went or the way one of the two keys says (the verifier's case:
+   * moving RIGHT, LEFT and DOWN on one tick, must never go UP).
+   */
+  it('two keys on one tick or a few apart, at phases across the frame: never a third direction', { timeout: 120_000 }, () => {
+    let pairs = 0;
+    for (const [from, k1, k2] of [['right', 'left', 'down'], ['right', 'down', 'left'], ['up', 'down', 'right'], ['left', 'up', 'right'], ['down', 'left', 'up']] as const) {
+      const presses: KeyPress[] = [{ t: 40, key: from }];
+      const slots = [...range(0, 12), ...range(13, F - 1, 23)].flatMap((o, i) => [0, 7, 30].map((d, j) => ({ t: snake.frameTick(4 + 12 * (3 * i + j)) + o, d })));
+      for (const { t, d } of slots) presses.push({ t, key: k1 }, { t: t + d, key: k2 }, { t: t + 6 * F, key: from });
+      const kept = disambiguate(slots.length * 12 + 10, presses, facts);
+      const r = run(snake, slots.length * 12 + 6, kept);
+      expect(r.error, `${from}: ${k1} + ${k2}`).toBeUndefined();
+      expect(r.dirs.slice(2).filter((x) => x !== from && x !== k1 && x !== k2), `${from}: ${k1} + ${k2}`).toEqual([]);
+      pairs += (kept.length - 1) / 3;
+    }
+    expect(pairs).toBeGreaterThan(5 * 3 * 15);
+  });
+
+  it('between settled moments the snake shows 5 pixels or 3 only briefly: at most the head and tail landing windows allow', { timeout: 60_000 }, () => {
     const sim = new Simulation(snake.network);
     for (const p of randomPresses(6, 300)) sim.schedule(p.t, snake.keys[p.key]);
     const lamps = snake.lamps.flat();
@@ -250,12 +304,13 @@ describe('snake machine: behaviour', () => {
       }
       expect([3, 4, 5]).toContain(sum);
     }
-    // The schedule bounds them (head and tail lamp spans); this run's longest are 16 and 97.
+    // The schedule bounds them (head and tail lamp spans, centred on each other by the queue's shift).
     const { head, tail } = snake.schedule;
-    expect([head.lamp[1] - tail.lamp[0], tail.lamp[1] - head.lamp[0]]).toEqual([26, 123]);
-    expect(longest[3]).toBeLessThanOrEqual(26);
-    expect(longest[5]).toBeLessThanOrEqual(123);
-    expect(longest).toEqual({ 3: 16, 5: 97 });
+    const bound = { 3: head.lamp[1] - tail.lamp[0], 5: tail.lamp[1] - head.lamp[0] };
+    expect(bound).toEqual(PIXEL_MOMENTS.bound);
+    expect(longest[3]).toBeLessThanOrEqual(bound[3]);
+    expect(longest[5]).toBeLessThanOrEqual(bound[5]);
+    expect(longest).toEqual(PIXEL_MOMENTS.longest);
   });
 
   it('other frame periods and start positions: the same layout, re-timed, still matches the model', { timeout: 60_000 }, () => {
@@ -284,9 +339,23 @@ describe('snake machine: behaviour', () => {
     // Bounded: no build-up (the last 1000 frames peak no higher than the first 1000), well under one pulse per connection.
     const early = Math.max(...r.pulsesByFrame.slice(0, 1000));
     const late = Math.max(...r.pulsesByFrame.slice(2000, 3000));
-    expect(r.maxPulses).toBeLessThanOrEqual(MAX_PULSES);
-    expect(r.maxPulses).toBeGreaterThan(MAX_PULSES * 0.8);
+    expect(r.machinePulses).toBe(MACHINE_PULSES);
+    expect(r.keyExcess).toBeLessThanOrEqual(0);
     expect(late, `early ${early}, late ${late}`).toBeLessThanOrEqual(early);
+  });
+
+  it('mashing: presses every few ticks on every key for 150 frames; the machine part of the pulses stays within its bound', { timeout: 120_000 }, () => {
+    const rng = mulberry32(99);
+    const presses: KeyPress[] = [];
+    for (let t = 1; t < 150 * F; t++) for (const key of DIRECTIONS) if (rng() < 0.02) presses.push({ t, key });
+    const kept = disambiguate(155, presses, facts);
+    expect(kept.length).toBeGreaterThan(presses.length * 0.9);
+    const r = run(snake, 150, kept);
+    expect(r.error).toBeUndefined();
+    expect(r.machinePulses).toBeLessThanOrEqual(MACHINE_PULSES);
+    expect(r.keyExcess).toBeLessThanOrEqual(0);
+    // The key paths do carry more when mashed: the total is not capped by the machine's bound.
+    expect(r.maxPulses).toBeGreaterThan(MACHINE_PULSES);
   });
 });
 
@@ -300,7 +369,7 @@ describe('snake machine: glue mutation test', () => {
    */
   it('every glue connection and every glue threshold matters', { timeout: 300_000 }, () => {
     const plan: Array<[number, Direction]> = [[10, 'down'], [18, 'left'], [20, 'up'], [22, 'right']];
-    // Each press counts by frame k's read (it reaches the bits in under 160 ticks).
+    // Each press counts by frame k's read (it counts within 116 ticks).
     const presses = plan.map(([k, key]) => ({ t: snake.frameTick(k) + facts.readOffset - 200, key }));
     const frames = 28;
     const ok = run(snake, frames, presses);
@@ -369,17 +438,22 @@ describe('snake machine: geometry and budget', () => {
     expect(new Set(owned).size).toBe(net.neurons.length);
   });
 
-  it('the keys: a row (◀ ▲ ▼ ▶) on top of the control unit, left of the screen at its top edge; no wire passes over a key', () => {
+  it('the keys: a row (◀ ▲ ▼ ▶) beside the screen\'s upper half, clear of every other neuron; no wire passes over a key', () => {
     const keys = DIRECTIONS.map((d) => cell.get(snake.keys[d])!);
-    const { bezel, blocks } = snake;
-    // Left to right ◀ ▲ ▼ ▶, one row, the control unit's top row, level with the bezel's top edge.
+    const { bezel, blocks, screen } = snake;
+    // Left to right ◀ ▲ ▼ ▶, one row, level with the screen's third row (of 8), inside the control unit's box.
     expect(['left', 'up', 'down', 'right'].map((d) => cell.get(snake.keys[d as Direction])!.x)).toEqual([...keys.map((k) => k.x)].sort((a, b) => a - b));
-    expect(new Set(keys.map((k) => k.y))).toEqual(new Set([blocks.control.box.y0]));
+    expect(new Set(keys.map((k) => k.y))).toEqual(new Set([screen.y0 + 2]));
     expect(blocks.control.box.y0).toBe(bezel.y0);
-    expect(blocks.control.box.y1).toBeLessThanOrEqual(bezel.y1);
+    expect(blocks.control.box.y1).toBe(bezel.y1);
     expect(blocks.control.box.x1).toBeLessThan(bezel.x0);
-    // Within reach of the screen: the nearest key is 5 cells from the bezel.
-    expect(bezel.x0 - Math.max(...keys.map((k) => k.x))).toBe(5);
+    // Within reach of the screen: the nearest key is 4 cells from the bezel, nothing in between.
+    const right = Math.max(...keys.map((k) => k.x));
+    expect(bezel.x0 - right).toBe(4);
+    expect(net.neurons.filter((n) => n.y === keys[0]!.y && n.x > right && n.x < bezel.x0)).toEqual([]);
+    // No other neuron next to a key (so no relay looks like a fifth button), and keys apart from each other by one cell.
+    const isKey = new Set(keys.map((k) => k.id));
+    expect(net.neurons.filter((n) => !isKey.has(n.id) && keys.some((k) => Math.max(Math.abs(k.x - n.x), Math.abs(k.y - n.y)) <= 1)).map((n) => n.id)).toEqual([]);
     const over = net.connections.flatMap((c) =>
       keys.filter((k) => k.id !== c.from && k.id !== c.to && segmentDistance(cell.get(c.from)!, cell.get(c.to)!, k) < KEY_CLEARANCE).map((k) => `${c.from} -> ${c.to} over ${k.id}`),
     );
@@ -394,9 +468,10 @@ describe('snake machine: geometry and budget', () => {
     const hops = snake.glue.connections.filter(([a]) => !lines.has(a));
     const over = hops.map(([a, z]) => net.neurons.filter((m) => m.id !== a && m.id !== z && segmentDistance(cell.get(a)!, cell.get(z)!, m) < 0.45).length);
     const clips = hops.filter(([a, z]) => Object.entries(snake.blocks).some(([n, b]) => n !== blockOf(a) && n !== blockOf(z) && segmentHitsRect(cell.get(a)!, cell.get(z)!, squares(b.box))));
-    // At most 5 neurons under one hop (a wire into a ring's centre crosses its disc).
-    expect(Math.max(...over)).toBeLessThanOrEqual(5);
-    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual({ hops: 63, over: 87, clips: 11 });
+    // At most 8 neurons under one hop (a wire into a ring's centre crosses its disc; power's wire into the
+    // head plane's ON crosses the plane's fringe).
+    expect(Math.max(...over)).toBeLessThanOrEqual(8);
+    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual(TIDY);
   });
 
   it('the probes cover every neuron but the lamps (checked against the model) and the glue relays (which cannot hold charge)', () => {
@@ -423,7 +498,7 @@ describe('snake machine: geometry and budget', () => {
     for (const [a, z] of snake.glue.connections) expect(net.connections.some((c) => c.from === a && c.to === z)).toBe(true);
     // Glue starts only at block outputs and ends only at block inputs (or relays).
     const { control: ctl, headX, headY, tailX, tailY, headSelect, tailSelect, queue } = snake.parts;
-    const outputs = new Set([...DIRECTIONS.map((d) => ctl.strobes[d]), ctl.clock, ctl.power, 'ctl-strobe-clock', ...queue.outputs, queue.any, ...headX.lines, ...headY.lines, ...tailX.lines, ...tailY.lines, ...snake.glue.ids]);
+    const outputs = new Set([...DIRECTIONS.map((d) => ctl.strobes[d]), ctl.ports.clock, ctl.ports.power, ...queue.outputs, queue.any, ...headX.lines, ...headY.lines, ...tailX.lines, ...tailY.lines, ...snake.glue.ids]);
     const inputs = new Set([...[headX, headY, tailX, tailY].flatMap((r) => [r.fwd, r.back, r.read, r.power]), ...queue.inputs, queue.shift, queue.power, ...[headSelect, tailSelect].flatMap((p) => [...p.cols, ...p.rows, p.power]), ...snake.glue.ids]);
     for (const [a, z] of snake.glue.connections) {
       expect(outputs.has(a), a).toBe(true);

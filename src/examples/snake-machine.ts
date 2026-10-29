@@ -69,13 +69,12 @@ const tt = (a: Cell, b: Cell) => travelTicks(a, b);
  * Board layout (cells; x right, y down). The screen is the centrepiece; the
  * head plane hangs below it and the tail plane above it (mirrored), leaving
  * the screen's one-cell bezel margin free. Every other block sits on the
- * left: the control unit beside the screen, its row of keys (◀ ▲ ▼ ▶)
- * level with the screen's top edge and no wire passing over them; the move
- * queue next to it; the head rings left of the head plane and the tail rings
- * left of the tail plane, each ring's line row facing its plane's inputs.
- * The control unit and the queue fill the 10 rows between the ring stacks,
- * which is why the keys are a row on top rather than beside the screen's
- * middle: the keys must sit above the flip-flops (buildControl).
+ * left: the control unit beside the screen, its row of keys (◀ ▲ ▼ ▶) level
+ * with the screen's third row, clear of every other neuron, and no wire
+ * passing over them; the move queue left of the control unit; the head rings
+ * left of the head plane and the tail rings left of the tail plane, each
+ * ring's line row facing its plane's inputs. The control unit and the queue
+ * fill the 10 rows between the ring stacks.
  */
 export const LAYOUT = {
   screen: { x0: 20, y0: 30, sx: 1 } as Place,
@@ -86,9 +85,9 @@ export const LAYOUT = {
   headY: { x0: 1, y0: 45, sx: 1, sy: 1 } as Place,
   tailX: { x0: 1, y0: 8, sx: 1, sy: 1 } as Place,
   tailY: { x0: 1, y0: 23, sx: 1, sy: 1 } as Place,
-  /** The control unit's origin (between its flip-flops; its keys are the row above). */
-  control: { x: 11, y: 30 } as Cell,
-  queue: { x0: 2, y0: 30, sx: 1, sy: -1 } as Place,
+  /** The control unit's origin: the cell of its AXIS register (see CONTROL_LAYOUT; the keys are 4 rows up). */
+  control: { x: 11, y: 36 } as Cell,
+  queue: { x0: -3, y0: 30, sx: 1, sy: -1 } as Place,
 };
 
 export interface Block {
@@ -140,7 +139,7 @@ const MAX_HOP = 9;
 const MAX_EDGE_HOP = 11;
 /** Where glue relays may go: from two cells left of the rings to the planes' left edge, over the planes' height. */
 const GLUE_AREA: Rect = { x0: -7, y0: 1, x1: 13, y1: 66 };
-/** The queue's shift line may be this many ticks longer than a straight wire. */
+/** The queue's shift line may land this many ticks after its target. */
 const SHIFT_SLACK = 15;
 /** No wire passes closer than this to a key's centre (a cell is 1 wide). */
 export const KEY_CLEARANCE = 0.5;
@@ -617,13 +616,16 @@ const span = (v: number[]): [number, number] => [Math.min(...v), Math.max(...v)]
  * Signal flow, once per frame. The control unit's frame clock fires at
  * frameTick(k) = 1 + kF; it samples the direction register and fires one
  * strobe. The strobe moves a head ring (RIGHT/LEFT: X fwd/back, DOWN/UP: Y
- * fwd/back) and enters the move queue in its own lane. The strobe clock K
- * (which fires every frame, 15 ticks before the strobe) reads both head rings;
- * their lines select one row and one column of the head plane, which adds +1
- * to the head's lamp. The queue gives each move back L = 4 frames later to the
- * tail rings, which ANY (fired by every queue output) reads; the tail plane
- * takes -1 from the lamp the tail leaves. Frames 0..3 have no queue output, so
- * the snake grows 1, 2, 3, 4 pixels, then stays 4 long.
+ * fwd/back) and enters the move queue in its own lane. The control's clock
+ * port K (a second frame Timer at the unit's left edge, firing with the
+ * clock) reads both head rings and fires the queue's shift; the ring lines
+ * select one row and one column of the head plane, which adds +1 to the
+ * head's lamp. The queue gives each move back L = 4 frames later to the tail
+ * rings, which ANY (fired by every queue output) reads; the tail plane takes
+ * -1 from the lamp the tail leaves. Frames 0..3 have no queue output, so the
+ * snake grows 1, 2, 3, 4 pixels, then stays 4 long. Power-on: the control's
+ * power port (a one-shot Timer beside the clock port, tick 1) powers every
+ * other block through a tree of relays.
  *
  * Timing is solved from the cells (Glue.movesFor): each X ring moves as
  * early as its wiring allows, and its Y ring so that every row fires inside
@@ -637,29 +639,30 @@ const span = (v: number[]): [number, number] => [Math.min(...v), Math.max(...v)]
  * of frame k - 4. Asserted by snake-machine.test.ts (SCHEDULE).
  *
  *   event                                            head          tail
- *   strobe fires (one of R/L/D/U)                    178
- *   queue: shift; inputs; outputs; ANY               170; 273-340; 204; 253
- *   Y ring moves (fwd or back), reads, line fires    403, 485, 746  434, 516, 777
- *   X ring moves, reads, line fires                  636, 714, 1021 684, 762, 1069
- *   plane rows fire                                  1001-1041     1053-1081
- *   plane columns fire                               1287-1320     1335-1368
- *   row - column skew (the plane's window)           -319..-246    -315..-254
+ *   strobe fires (one of R/L/D/U)                    238
+ *   queue: shift; inputs; outputs; ANY               315; 362-431; 349; 398
+ *   Y ring moves (fwd or back), reads, line fires    587, 669, 930  506, 588, 849
+ *   X ring moves, reads, line fires                  754, 832, 1139 753, 831, 1138
+ *   plane rows fire                                  1185-1225     1125-1153
+ *   plane columns fire                               1405-1438     1404-1437
+ *   row - column skew (the plane's window)           -253..-180    -312..-251
  *                                                    (-323..-180)  (-318..-173)
- *   the pixel's Q fires                              1410-1472     1457-1521
- *   lamp pulse lands (+1 head, -1 tail)              1546-1620     1594-1669
- *   settled: every lamp pulse of frame k landed      1669 = settledTick(k) - frameTick(k)
- *     (frame k + 1's first lands at 480 + 1546)
+ *   the pixel's Q fires                              1528-1590     1526-1590
+ *   lamp pulse lands (+1 head, -1 tail)              1664-1738     1663-1738
+ *   settled: every lamp pulse of frame k landed      1738 = settledTick(k) - frameTick(k)
+ *     (frame k + 1's first lands at 480 + 1663)
  *
- * The shift is as early as a straight wire from the frame clock allows, so
- * the tail's -1 lands soon after the head's +1: for a moment each frame the
- * snake shows 5 pixels (the head has arrived, the tail not yet left; up to
- * 123 ticks, depending on the two pixels) or 3 (up to 26 ticks).
+ * The head's +1 and the tail's -1 land on different ticks (each depends on
+ * its pixel), so for a moment each frame the snake shows 5 pixels (the head
+ * has arrived, the tail not yet left) or 3. The shift centres the tail's
+ * landing window on the head's, so neither lasts more than 75 ticks (the
+ * random runs reach 53).
  *
- * Latency (ticks, to the head lamp's +1): strobe to lamp 1368..1442; key
- * press to strobe 212..707 (any phase, any turn); press to lamp 1580..2149
- * (about 0.8 to 1.1 s at speed 32). A key reaches the direction register in
- * 78 to 97 ticks, so that both bits of a turn change at the same read (see
- * buildControl).
+ * Latency (ticks, to the head lamp's +1): strobe to lamp 1426..1500; key
+ * press to strobe 269..774 (any phase, any turn); press to lamp 1695..2274
+ * (about 0.9 to 1.2 s at speed 32). A press counts at a frame's AXIS read
+ * 104 to 116 ticks after it, or 90 to 109 when it turns along the axis the
+ * snake is on (◀ after ▶: only H changes); see buildControl.
  */
 export function buildSnake(opts: SnakeOptions = {}): Snake {
   const F = opts.F ?? 480;
@@ -695,36 +698,46 @@ export function buildSnake(opts: SnakeOptions = {}): Snake {
   const lanes = [st.right, st.left, st.down, st.up];
   lanes.forEach((s, l) => glue.wire(s, q.inputs[l]!));
   const inputs = lanes.map((s, l) => T0 + glue.ticks(s, q.inputs[l]!));
-  // The shift comes from the frame clock, so that every input is within the
-  // queue's tolerance, and as early as a near-straight wire allows: the tail
-  // replays a move as soon as it can, so that the tail's -1 lands close to the
-  // head's +1 and the snake shows 5 pixels as briefly as possible each frame.
-  const shiftLo = Math.max(...inputs) - q.tolerance.max;
-  const shift = glue.lineIn(ctl.clock, q.shift, shiftLo, Math.min(Math.min(...inputs) - q.tolerance.min, Math.max(shiftLo, glue.ticks(ctl.clock, q.shift) + SHIFT_SLACK)), 'g-q-shift');
 
-  // The ring reads tap the strobe clock K, which fires every frame 15 ticks before the strobe.
-  const K = `${PREFIX.control}strobe-clock`;
-  const kFire = T0 - glue.ticks(K, st.right);
+  // Tail: driven by the queue outputs (frame k replays frame k - L), read by ANY. Its moves are solved
+  // relative to the outputs' tick, which the shift sets.
+  const [tX0, tY0] = glue.movesFor(
+    [[q.outputs[0]!, tx.fwd, 'g-tx-fwd'], [q.outputs[1]!, tx.back, 'g-tx-back']],
+    [[q.outputs[2]!, ty.fwd, 'g-ty-fwd'], [q.outputs[3]!, ty.back, 'g-ty-back']],
+    0, fires(ty, ts.rows), fires(tx, ts.cols), ts.skew,
+  );
+  const tailCols = fires(tx, ts.cols);
+
+  // The shift comes from the frame clock, every input within the queue's
+  // tolerance. Each frame the head's +1 and the tail's -1 land on different
+  // ticks (depending on the two pixels), so for a moment the snake shows 5
+  // pixels (head arrived, tail not yet left) or 3: the shift centres the
+  // tail's landing window on the head's, which keeps the longer of the two as
+  // short as the windows allow.
+  const lampWindow = (moveX: number, cols: number[], sel: Select) => span(cols.flatMap((c, x) => sel.hit.map((row) => moveX + c + row[x]!)));
+  const headLamps = lampWindow(hX, headCols, hs);
+  const tailLamps = lampWindow(q.outLag + tX0, tailCols, ts); // relative to the shift
+  const shiftLo = Math.max(Math.max(...inputs) - q.tolerance.max, glue.ticks(ctl.ports.clock, q.shift));
+  const shiftHi = Math.min(...inputs) - q.tolerance.min;
+  const centre = Math.max(shiftLo, Math.min(shiftHi, Math.floor((headLamps[0] + headLamps[1] - tailLamps[0] - tailLamps[1]) / 2)));
+  const shift = glue.lineIn(ctl.ports.clock, q.shift, centre, Math.min(shiftHi, centre + SHIFT_SLACK), 'g-q-shift');
+  const out = shift + q.outLag;
+  const [tX, tY] = [out + tX0, out + tY0];
+  const tailRows = fires(ty, ts.rows).map((r) => tY + r);
+
+  // The ring reads tap the control unit's clock port (a frame Timer at its edge, firing with its clock).
+  const K = ctl.ports.clock;
+  const kFire = 0;
   glue.exactTree(K, [
     [hy.read, hY + hy.readLag - kFire, 'g-hy-read'],
     [hx.read, hX + hx.readLag - kFire, 'g-hx-read'],
   ]);
-
-  // Tail: driven by the queue outputs (frame k replays frame k - L), read by ANY.
-  const out = shift + q.outLag;
-  const [tX, tY] = glue.movesFor(
-    [[q.outputs[0]!, tx.fwd, 'g-tx-fwd'], [q.outputs[1]!, tx.back, 'g-tx-back']],
-    [[q.outputs[2]!, ty.fwd, 'g-ty-fwd'], [q.outputs[3]!, ty.back, 'g-ty-back']],
-    out, fires(ty, ts.rows), fires(tx, ts.cols), ts.skew,
-  );
-  const tailRows = fires(ty, ts.rows).map((r) => tY + r);
-  const tailCols = fires(tx, ts.cols);
-  glue.line(q.any, ty.read, tY + ty.readLag - out - q.anyLag, 'g-ty-read');
-  glue.line(q.any, tx.read, tX + tx.readLag - out - q.anyLag, 'g-tx-read');
+  glue.line(q.any, ty.read, tY0 + ty.readLag - q.anyLag, 'g-ty-read');
+  glue.line(q.any, tx.read, tX0 + tx.readLag - q.anyLag, 'g-tx-read');
 
   // Power-on: the control unit's one-shot timer (tick 1) powers every block, through a tree of relays.
-  const powered = [q.power, hy.power, ty.power, hx.power, tx.power, hs.power, ts.power];
-  const arrive = glue.tree(ctl.power, powered, 'g-power');
+  const powered = [q.power, ty.power, tx.power, hy.power, hx.power, hs.power, ts.power];
+  const arrive = glue.tree(ctl.ports.power, powered, 'g-power');
   const power = Object.fromEntries(powered.map((id, i) => [id, arrive[i]!]));
 
   const network = b.build();
@@ -754,15 +767,13 @@ interface Solved {
   tailCols: number[];
 }
 
-/** Rest charges of the control unit at read + 48 (see snake-control.test.ts): flip-flop gates hold a hole or not, registers a bit. */
+/** Rest charges of the control unit at restOffset (see snake-control.test.ts): flip-flop gates hold a hole or not, registers a bit, everything else 0. */
 function controlRest(ctl: ControlUnit, ids: string[]): Record<string, number[]> {
-  const strobeRest: Record<Direction, number> = { right: 0, left: -1, down: -1, up: -2 };
   const allowed: Record<string, number[]> = Object.fromEntries(ids.map((id) => [id, [0]]));
-  for (const bit of [ctl.bits.axis, ctl.bits.sign]) {
+  for (const bit of Object.values(ctl.bits)) {
     allowed[bit.setGate] = allowed[bit.resetGate] = [-1, 0];
     allowed[bit.register] = [0, 1];
   }
-  for (const d of DIRECTIONS) allowed[ctl.strobes[d]] = [strobeRest[d]];
   return allowed;
 }
 
@@ -844,14 +855,17 @@ function assemble(s: Solved): Snake {
   const probes = (k: number, state: FrameState): Probe[] => {
     const c = frameTick(k);
     return [
-      { tick: c + ctl.readOffset + 48, block: 'control', allowed: controlRest(ctl, ctlIds) },
+      { tick: c + ctl.restOffset, block: 'control', allowed: controlRest(ctl, ctlIds) },
       { tick: c + s.hX + hx.settle, block: 'headX', allowed: exact(hx.restFor(state.head.x)) },
       { tick: c + s.hY + hy.settle, block: 'headY', allowed: exact(hy.restFor(state.head.y)) },
-      { tick: c + s.tX + tx.settle, block: 'tailX', allowed: exact(tx.restFor(state.tail.x)) },
-      { tick: c + s.tY + ty.settle, block: 'tailY', allowed: exact(ty.restFor(state.tail.y)) },
+      // The tail blocks idle until frame L (no queue output yet) and need power only by then.
+      ...(k < L ? [] : [
+        { tick: c + s.tX + tx.settle, block: 'tailX' as const, allowed: exact(tx.restFor(state.tail.x)) },
+        { tick: c + s.tY + ty.settle, block: 'tailY' as const, allowed: exact(ty.restFor(state.tail.y)) },
+      ]),
       { tick: c + s.shift + qSettle, block: 'queue', allowed: exact(q.restFor(state.queued)) },
       { tick: c + head.rows[1] + hs.settle, block: 'headSelect', allowed: exact(hs.restFor()) },
-      { tick: c + tail.rows[1] + ts.settle, block: 'tailSelect', allowed: exact(ts.restFor()) },
+      ...(k < L ? [] : [{ tick: c + tail.rows[1] + ts.settle, block: 'tailSelect' as const, allowed: exact(ts.restFor()) }]),
     ];
   };
   return {
