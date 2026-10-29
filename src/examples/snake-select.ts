@@ -331,6 +331,29 @@ function getLayout(w: number, h: number, polarity: 1 | -1) {
   return layouts.get(id)!;
 }
 
+/** [min, max] of a list. */
+const range = (v: number[]) => [Math.min(...v), Math.max(...v)] as [number, number];
+
+/**
+ * The frame schedule of a plane size and polarity, from its layout (ticks;
+ * row side after the row fire, column side after the column fire). The
+ * lamp pulse is not here: it depends on where the screen is (Select.hit).
+ */
+export function selectSchedule(w: number, h: number, polarity: 1 | -1) {
+  const { T } = getLayout(w, h, polarity);
+  const px = T.px.flat();
+  return {
+    holdStart: range(px.map((p) => p.b)),
+    columnPulse: range(px.map((p) => p.a)),
+    columnDone: range(px.map((p) => p.colLast)),
+    holdEnd: range(px.map((p) => p.c)),
+    skew: [T.lo, T.hi] as [number, number],
+    settle: T.settle,
+    minF: T.minF,
+    powerLead: T.powerLead,
+  };
+}
+
 // ---- builders ----------------------------------------------------------------
 
 /** The screen: a w x h rectangle of Lamps at pitch 1, lamps[y][x] at local (x, y). */
@@ -408,6 +431,52 @@ function wiring(L: Layout): Array<[string, string]> {
   return out;
 }
 
+/**
+ * Select plane: a w x h (10 x 8) coincident-selection plane that adds +1
+ * (head) or -1 (tail) to the one lamp whose column and row both fire.
+ *
+ * Per pixel two neurons: Q (threshold 1, resting at -1, a hole the power-on
+ * pulse digs) and its partner K, side by side.
+ * - The row is the hold: rows[y] fires first; relays S put +1 on the 10 Qs
+ *   of row y (charge 0: armed), and Inhibitors Z take it back later.
+ * - The column is the strike: cols[x] fires later; its +1 lands on the 8 Qs
+ *   of column x. The armed one reaches 1 and fires: the pixel. The other
+ *   seven go from -1 to 0 and get a -1 right back.
+ * - Polarity +1 (head): Q is a normal neuron. It lights its lamp (+1); its
+ *   relay K gives it +1 back 30 ticks later, after the column's -1 (from the
+ *   column's partner Inhibitor M) has landed; the hold's -1 then leaves Q at -1.
+ * - Polarity -1 (tail): Q is an Inhibitor. Its -1 dims its lamp and closes
+ *   its gate K (an Inhibitor resting at 0) just before the column's trigger
+ *   relay M pokes all the column's gates: open gates fire and send their
+ *   half-selected Q its -1; the selected Q's gate stays shut (back to 0), and
+ *   the hold's -1 brings that Q back to -1.
+ *
+ * Holding costs frame time (a frame lasts from the first hold +1 to the last
+ * restore), so each kind of pulse is made to land at nearly the same tick on
+ * every Q it serves. The two plane rows next to the screen (the farthest from
+ * C) take the column pulse straight from C; every other pair of rows gets it
+ * through a feeder F placed one detour away. Each half row gets its hold from
+ * its own relay S and Inhibitor Z, placed far enough below that their fans are
+ * narrow. selectTiming() derives the window and every other fact from the cells.
+ *
+ * Frame schedule, in ticks: rows fire at T, F apart (or not at all); the
+ * column fires at t = T - s. Asserted by snake-select.test.ts.
+ *
+ *   event                                          head (+1)      tail (-1)
+ *   hold +1 lands on the row's 10 Qs               T + 271..308   T + 271..308
+ *   column +1 lands on the column's 8 Qs           t + 120..155   t + 120..155   the selected Q fires
+ *   column side done (restore, gates, -1s)         t + 150..185   t + 154..192
+ *   hold -1 lands on the row's 10 Qs               T + 477..502   T + 474..501
+ *   lamp pulse (intended placement, hit)           t + 240..297   t + 240..297
+ *   skew s = T - t, inclusive                      -323..-180     -318..-173
+ *   every internal neuron at rest (settle)         T + 508        T + 510
+ *   smallest frame period (minF)                   238            240
+ *   power fires at least powerLead before a row    277            295
+ *
+ * The column always fires last, so hit is also the latency from the later
+ * input. The rows need their lead: their relays sit far enough out to reach
+ * all 10 Qs of a row at once.
+ */
 export function buildSelect(b: NetworkBuilder, place: Place, opts: SelectOptions): Select {
   const { w, h, polarity, prefix, lamps } = opts;
   const { L, T } = getLayout(w, h, polarity);
@@ -416,21 +485,21 @@ export function buildSelect(b: NetworkBuilder, place: Place, opts: SelectOptions
     const c = L.cells.get(role)!;
     return at(place, c.x, c.y);
   };
+  // Which plane column / row serves pixel (x, y): the one that keeps every
+  // Q-to-lamp wire the same length (the plane is a translated copy of the screen).
+  const lampCell = new Map(b.build().neurons.map((n) => [n.id, n] as const));
+  const lamp = (x: number, y: number) => lampCell.get(lamps[y]![x]!)!;
+  const iOf = (x: number) => (Math.sign(lamp(w - 1, 0).x - lamp(0, 0).x) === place.sx ? x : w - 1 - x);
+  const jOf = (y: number) => (Math.sign(lamp(0, h - 1).y - lamp(0, 0).y) === (place.sy ?? 1) ? y : h - 1 - y);
   const labels: Record<string, string> = { power: 'ON' };
+  for (let x = 0; x < w; x++) labels[`c${iOf(x)}`] = `X${x}`;
+  for (let y = 0; y < h; y++) labels[`r${jOf(y)}`] = `Y${y}`;
   for (const role of L.cells.keys()) {
     const c = abs(role);
-    const label = labels[role] ?? (role[0] === 'c' ? `X${role.slice(1)}` : role[0] === 'r' ? `Y${role.slice(1)}` : undefined);
+    const label = labels[role];
     b.neuron(kindOf(role, polarity), c.x, c.y, { id: id(role), threshold: 1, ...(label ? { label } : {}) });
   }
   for (const [from, to] of wiring(L)) b.connect(id(from), id(to));
-  // Which plane column / row serves pixel (x, y): the one that keeps every
-  // Q-to-lamp wire the same length (the plane is a translated copy of the screen).
-  const net = b.build();
-  const cellOf = new Map(net.neurons.map((n) => [n.id, n] as const));
-  const lamp = (x: number, y: number) => cellOf.get(lamps[y]![x]!)!;
-  const sy = place.sy ?? 1;
-  const iOf = (x: number) => (Math.sign(lamp(w - 1, 0).x - lamp(0, 0).x) === place.sx ? x : w - 1 - x);
-  const jOf = (y: number) => (Math.sign(lamp(0, h - 1).y - lamp(0, 0).y) === sy ? y : h - 1 - y);
   const select = Array.from({ length: h }, (_, y) => Array.from({ length: w }, (_, x) => id(`q${iOf(x)}.${jOf(y)}`)));
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) b.connect(select[y]![x]!, lamps[y]![x]!);
   const hit = Array.from({ length: h }, (_, y) =>
