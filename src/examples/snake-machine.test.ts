@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Simulation, type Network } from '../engine';
 import { mulberry32 } from '../engine/rng';
 import { DIRECTIONS, type Direction } from './snake-control';
-import { buildSnake, segmentHitsRect, squares, type Snake } from './snake-machine';
+import { buildSnake, segmentDistance, segmentHitsRect, squares, type Snake } from './snake-machine';
 import { controlFacts, controlModel, disambiguate, snakeModel, type KeyPress } from './snake-model';
 
 const snake = buildSnake();
@@ -333,6 +333,25 @@ describe('snake machine: geometry and budget', () => {
     expect(snake.blocks.control.box.x1).toBeLessThan(snake.bezel.x0);
     expect(snake.blocks.control.box.y0).toBeGreaterThanOrEqual(snake.bezel.y0);
     expect(snake.blocks.control.box.y1).toBeLessThanOrEqual(snake.bezel.y1);
+  });
+
+  it('glue is tidy: few neurons passed over, few block corners clipped (ring line bundles aside)', () => {
+    // The ring lines must reach the plane inputs, which sit inside the planes:
+    // those 36 wires cross the planes' relay fringe. Every other glue hop:
+    const lines = new Set([snake.parts.headX, snake.parts.headY, snake.parts.tailX, snake.parts.tailY].flatMap((r) => r.lines));
+    const blockOf = (id: string) => Object.entries(snake.blocks).find(([, b]) => b.ids.includes(id))?.[0];
+    const hops = snake.glue.connections.filter(([a]) => !lines.has(a));
+    const over = hops.map(([a, z]) => net.neurons.filter((m) => m.id !== a && m.id !== z && segmentDistance(cell.get(a)!, cell.get(z)!, m) < 0.45).length);
+    const clips = hops.filter(([a, z]) => Object.entries(snake.blocks).some(([n, b]) => n !== blockOf(a) && n !== blockOf(z) && segmentHitsRect(cell.get(a)!, cell.get(z)!, squares(b.box))));
+    // At most 6 neurons under one hop (a wire into a ring's centre crosses its disc).
+    expect(Math.max(...over)).toBeLessThanOrEqual(6);
+    expect({ hops: hops.length, over: over.reduce((s, v) => s + v, 0), clips: clips.length }).toEqual({ hops: 59, over: 94, clips: 8 });
+  });
+
+  it('the probes cover every neuron but the lamps (checked against the model instead)', () => {
+    const state = { head: { x: 1, y: 1 }, tail: { x: 0, y: 0 }, queued: [0, 1, 2, 3] };
+    const probed = new Set(snake.probes(9, state).flatMap((p) => Object.keys(p.allowed)));
+    expect(net.neurons.filter((n) => !probed.has(n.id)).map((n) => n.id).sort()).toEqual([...lampIds].sort());
   });
 
   it('budget and size', () => {
