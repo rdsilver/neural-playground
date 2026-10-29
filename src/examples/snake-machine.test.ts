@@ -6,7 +6,9 @@ import { buildSnake, segmentHitsRect, squares, type Snake } from './snake-machin
 import { controlFacts, controlModel, disambiguate, snakeModel, type KeyPress } from './snake-model';
 
 const snake = buildSnake();
-const facts = controlFacts(snake.network, snake.parts.control);
+const factsCache = new Map<Snake, ReturnType<typeof controlFacts>>();
+const factsOf = (s: Snake) => factsCache.get(s) ?? factsCache.set(s, controlFacts(s.network, s.parts.control)).get(s)!;
+const facts = factsOf(snake);
 const F = snake.F;
 const L = 4;
 /** Most pulses ever in flight at once (the long run measures 222). */
@@ -58,8 +60,9 @@ interface RunResult {
  * Stops at the first problem.
  */
 function run(s: Snake, frames: number, presses: KeyPress[], opts: RunOptions = {}): RunResult {
+  const F = s.F;
   // The run ends at frame (frames - 1)'s settled tick, a few frames of strobes later.
-  const dirs = controlModel(frames + 5, presses, facts);
+  const dirs = controlModel(frames + 5, presses, factsOf(s));
   const model = snakeModel(dirs, s.start);
   const sim = new Simulation(opts.net ?? s.network);
   for (const p of presses) sim.schedule(p.t, s.keys[p.key]);
@@ -140,16 +143,17 @@ function run(s: Snake, frames: number, presses: KeyPress[], opts: RunOptions = {
 }
 
 /** Random presses: bursts of 1-4 keys (some on the same tick), gaps up to 3 frames; ambiguous ties dropped. */
-function randomPresses(seed: number, frames: number): KeyPress[] {
+function randomPresses(seed: number, frames: number, s = snake): KeyPress[] {
   const rng = mulberry32(seed);
   const presses: KeyPress[] = [];
+  const F = s.F;
   let t = 30;
   while (t < frames * F) {
     const burst = 1 + Math.floor(rng() * 4);
     for (let i = 0; i < burst; i++) presses.push({ t: t + (rng() < 0.3 ? 0 : Math.floor(rng() * 40)), key: DIRECTIONS[Math.floor(rng() * 4)]! });
     t += Math.floor(rng() * 3 * F);
   }
-  const kept = disambiguate(frames + 5, presses, facts);
+  const kept = disambiguate(frames + 5, presses, factsOf(s));
   expect(kept.length).toBeGreaterThan(presses.length * 0.95);
   return kept;
 }
@@ -212,6 +216,25 @@ describe('snake machine: behaviour', () => {
       expect(r.error).toBeUndefined();
       expect(new Set(r.dirs)).toEqual(new Set(DIRECTIONS));
     });
+
+  it('other frame periods and start positions: the same layout, re-timed, still matches the model', { timeout: 60_000 }, () => {
+    for (const [F2, start] of [[360, { x: 9, y: 7 }], [600, { x: 4, y: 0 }]] as const) {
+      const other = buildSnake({ F: F2, start });
+      expect(other.network.neurons.map((n) => [n.x, n.y])).toEqual(snake.network.neurons.map((n) => [n.x, n.y]));
+      expect(run(other, 150, randomPresses(F2, 150, other)).error).toBeUndefined();
+    }
+    expect(() => buildSnake({ F: 240 })).toThrow(/never rests/);
+  });
+
+  it('the checker itself catches a machine that disagrees with the model', () => {
+    // A snake started elsewhere, checked against the default start's model.
+    const other = buildSnake({ start: { x: 5, y: 5 } });
+    expect(run(snake, 8, [], { net: other.network }).error).toMatch(/Q|lamp|holds/);
+    // Presses the machine never sees.
+    const presses = [{ t: snake.frameTick(3), key: 'down' as const }];
+    const deaf: Network = { ...snake.network, connections: snake.network.connections.filter((c) => c.from !== snake.keys.down) };
+    expect(run(snake, 8, presses, { net: deaf }).error).toMatch(/strobe/);
+  });
 
   it('long run: 3000 frames of random presses, no drift, pulses in flight bounded', { timeout: 120_000 }, () => {
     const r = run(snake, 3000, randomPresses(5, 3000));

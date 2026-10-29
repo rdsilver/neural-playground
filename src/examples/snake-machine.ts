@@ -152,7 +152,11 @@ class Glue {
   readonly conns: Array<[string, string]> = [];
   private cells = new Map<string, Cell>();
   private occupied = new Set<string>();
-  private nearCache = new Map<string, number>();
+  /** Per hop (by its cells): length, neurons passed over when the glue began, cells run through each block. */
+  private hops = new Map<number, { len: number; near: number; inside: Array<[string, number]> }>();
+  /** Relays placed since: they count as passed over too. */
+  private placed: Cell[] = [];
+  private frozen = false;
 
   constructor(
     private b: NetworkBuilder,
@@ -160,12 +164,13 @@ class Glue {
     private bezel: Rect,
   ) {
     for (const n of b.build().neurons) this.track(n.id, n);
+    this.frozen = true;
   }
 
   private track(id: string, c: Cell) {
     this.cells.set(id, { x: c.x, y: c.y });
     this.occupied.add(cellKey(c));
-    this.nearCache.clear();
+    if (this.frozen) this.placed.push({ x: c.x, y: c.y });
   }
 
   cell(id: string): Cell {
@@ -191,28 +196,33 @@ class Glue {
   /** A hop may not cross the screen or its margin (their cells' squares). */
   ok = (p: Cell, q: Cell) => !segmentHitsRect(p, q, squares(this.bezel));
 
-  /** Neurons a hop passes over (within 0.45 of their centre), its ends excepted. */
-  private near(p: Cell, q: Cell): number {
-    const k = `${cellKey(p)}>${cellKey(q)}`;
-    let c = this.nearCache.get(k);
-    if (c === undefined) {
-      c = 0;
+  /** A hop's fixed facts (cached): neurons it passes over (within 0.45 of their centre, its ends excepted) among those present when the glue began. */
+  private hop(p: Cell, q: Cell) {
+    const k = (((p.x + 512) * 1024 + p.y + 512) * 1024 + q.x + 512) * 1024 + q.y + 512;
+    let h = this.hops.get(k);
+    if (!h) {
+      let near = 0;
       for (let x = Math.min(p.x, q.x); x <= Math.max(p.x, q.x); x++)
         for (let y = Math.min(p.y, q.y); y <= Math.max(p.y, q.y); y++) {
           const m = { x, y };
-          if ((x !== p.x || y !== p.y) && (x !== q.x || y !== q.y) && this.occupied.has(cellKey(m)) && segmentDistance(p, q, m) < 0.45) c++;
+          if ((x !== p.x || y !== p.y) && (x !== q.x || y !== q.y) && this.occupied.has(cellKey(m)) && !this.placed.some((r) => r.x === x && r.y === y) && segmentDistance(p, q, m) < 0.45) near++;
         }
-      this.nearCache.set(k, c);
+      const len = Math.hypot(p.x - q.x, p.y - q.y);
+      const inside = Object.entries(this.boxes).map(([name, r]) => [name, len * clipFraction(p, q, squares(r))] as [string, number]).filter(([, v]) => v > 0);
+      h = { len, near, inside };
+      this.hops.set(k, h);
     }
-    return c;
+    return h;
   }
 
   /** Hop cost: length, +4 per neuron passed over, +2 per cell run through a block other than `own`, + a relay's cost. */
   hopCost(p: Cell, q: Cell, own: ReadonlySet<string>): number {
-    const len = Math.hypot(p.x - q.x, p.y - q.y);
+    const h = this.hop(p, q);
+    let near = h.near;
+    for (const r of this.placed) if ((r.x !== p.x || r.y !== p.y) && (r.x !== q.x || r.y !== q.y) && segmentDistance(p, q, r) < 0.45) near++;
     let inside = 0;
-    for (const [name, r] of Object.entries(this.boxes)) if (!own.has(name)) inside += len * clipFraction(p, q, squares(r));
-    return len + 4 * this.near(p, q) + 2 * inside + RELAY_COST;
+    for (const [name, v] of h.inside) if (!own.has(name)) inside += v;
+    return h.len + 4 * near + 2 * inside + RELAY_COST;
   }
 
   wire(from: string, to: string | string[]) {
@@ -308,9 +318,16 @@ class Glue {
         for (const d of window) if (tt(o, d) + tt(d, r) === needMove) consider([...relays.slice(0, h - 1), d, ...relays.slice(h)]);
       }
       // Two relays inserted into hop h (small detours only: the search is quadratic).
-      if (!best && extra <= 120)
-        for (const d of window)
-          for (const e of window) if (d !== e && tt(p, d) + tt(d, e) + tt(e, q) === need) consider([...relays.slice(0, h), d, e, ...relays.slice(h)]);
+      if (!best && extra <= 120) {
+        const toQ = window.map((e) => tt(e, q));
+        for (const d of window) {
+          const rest = need - tt(p, d);
+          if (rest <= 0) continue;
+          window.forEach((e, j) => {
+            if (d !== e && toQ[j]! < rest && tt(d, e) + toQ[j]! === rest) consider([...relays.slice(0, h), d, e, ...relays.slice(h)]);
+          });
+        }
+      }
     }
     if (best || depth >= 4) return best?.relays;
     // Too far for one detour: insert the relay that adds the most ticks per unit of cost, then pad the rest.
@@ -419,9 +436,10 @@ class Glue {
    * Lines a_i -> z_i, all exactly T ticks: the given routes padded (or, if
    * that fails, routes with travel weighted more). Returns false if none fits.
    */
-  padLines(pairs: Array<[string, string, string]>, T: number): boolean {
+  padLines(pairs: Array<[string, string, string]>, T: number, memo = new Map<number, ReturnType<Glue['routes']>>()): boolean {
     for (const lambda of [0, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 3]) {
-      const routes = this.routes(pairs, lambda);
+      // Routes only change when something is built: callers may share a memo between attempts.
+      const routes = memo.get(lambda) ?? memo.set(lambda, this.routes(pairs, lambda)).get(lambda)!;
       const avoid = new Set<string>();
       const paths: Cell[][] = [];
       for (const [i, [a, z]] of pairs.entries()) {
@@ -449,6 +467,7 @@ class Glue {
     const dLo = -skew.max - Math.min(...colsRel) + Math.max(...rowsRel);
     const dHi = -skew.min - Math.max(...colsRel) + Math.min(...rowsRel);
     if (dLo > dHi) throw new Error('glue: line spreads exceed the skew window');
+    const memoY = new Map<number, ReturnType<Glue['routes']>>();
     const rx = Math.max(...this.routes(xs).map((r) => r.ticks));
     const ry = Math.max(...this.routes(ys).map((r) => r.ticks));
     for (let mX = from + Math.max(rx, ry + dLo); mX < from + rx + 400; mX++) {
@@ -457,7 +476,7 @@ class Glue {
       for (const mY of ys0) {
         if (mY - from < ry || mX - mY < dLo || mX - mY > dHi) continue;
         const saved = this.ids.length;
-        if (this.padLines(ys, mY - from)) {
+        if (this.padLines(ys, mY - from, memoY)) {
           if (this.padLines(xs, mX - from)) return [mX, mY];
           throw new Error(`glue: built Y lines but no X lines at ${mX} (relays from ${saved})`);
         }
