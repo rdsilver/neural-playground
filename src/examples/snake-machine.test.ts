@@ -3,7 +3,7 @@ import { Simulation, type Network } from '../engine';
 import { mulberry32 } from '../engine/rng';
 import { DIRECTIONS, type Direction } from './snake-control';
 import { buildSnake, segmentDistance, segmentHitsRect, squares, type Snake } from './snake-machine';
-import { controlFacts, controlModel, disambiguate, snakeModel, type KeyPress } from './snake-model';
+import { Ambiguous, controlFacts, controlModel, disambiguate, snakeModel, type KeyPress } from './snake-model';
 
 const snake = buildSnake();
 const factsCache = new Map<Snake, ReturnType<typeof controlFacts>>();
@@ -163,8 +163,9 @@ function turnFrame(from: Direction, to: Direction, p: number): number | undefine
   try {
     const dirs = controlModel(Math.ceil(p / F) + 3, [{ t: 40, key: from }, { t: p, key: to }], facts);
     return dirs.findIndex((d, k) => k > 2 && d === to);
-  } catch {
-    return undefined;
+  } catch (e) {
+    if (e instanceof Ambiguous) return undefined;
+    throw e;
   }
 }
 
