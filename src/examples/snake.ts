@@ -18,7 +18,7 @@ export const SNAKE_EXAMPLES: Example[] = [
     summary: 'A snake game on a 10 × 8 dot-matrix screen, made only of neurons.',
     description: [
       'Steer the snake with the arrow keys or WASD, or click ◀ ▲ ▼ ▶ on the board. Every part of this little computer is made of the same neurons as the other examples; there are just more of them.',
-      'KEYS: each key sets two flip-flops, one for the axis (left/right or up/down) and one for the sign. Once per frame the clock reads them, and a decoder fires exactly one of four direction pulses.',
+      'KEYS: three flip-flops remember the direction: one for the axis (sideways or up/down) and one for each axis’s sign. A key sets the axis and its own sign, so two keys pressed together never mix into a third direction. Once per frame the clock reads them, and exactly one of four direction pulses fires.',
       'HEAD X and HEAD Y: two ring counters hold the head’s column and row as a single token that steps forward or back on each direction pulse, wrapping around the edges.',
       'Screen: the column and row lines meet in a grid of select neurons, like the core memory of early computers. Only the neuron where both lines arrive fires, and it lights its lamp.',
       'MOVE QUEUE and TAIL: every move also waits four frames in the move queue, then drives a second pair of ring counters that follows four steps behind the head and switches off the pixel the tail leaves. So the snake is always four pixels long.',

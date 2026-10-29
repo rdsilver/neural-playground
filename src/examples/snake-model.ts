@@ -1,5 +1,5 @@
 import { travelTicks, type Network } from '../engine';
-import type { ControlUnit, Direction } from './snake-control';
+import { BITS, DIRECTIONS, keyTiming, type BitName, type ControlUnit, type Direction } from './snake-control';
 
 /**
  * Reference models of the Neural Snake, shared by the tests (no test code
@@ -14,6 +14,8 @@ import type { ControlUnit, Direction } from './snake-control';
 export interface Press {
   t: number;
   set: boolean;
+  /** Which bit (for disambiguate()). */
+  bit?: BitName;
 }
 
 /** A press the model cannot decide: it hits a gate exactly as news arrives. */
@@ -24,17 +26,19 @@ export class Ambiguous extends Error {
 }
 
 /**
- * Exact model of one bit: a press poked at tick t reaches its gate at t+30;
- * it gets through iff that gate is open (the other gate's last change has
- * been news for 15 ticks). A change lands on the register 34 (SET) or 30
- * (RST) ticks after the gate. Returns, per read tick, whether G fires, plus
- * the register charge just before each read. Throws Ambiguous if a press
- * hits a gate exactly as news arrives (a tie the model does not decide).
+ * Exact model of one bit (starting at `initial`, its hole already dug): a
+ * press poked at tick t reaches its gate at t+30; it gets through iff that
+ * gate is open (the other gate's last change has been news for 15 ticks).
+ * A change lands on the register 34 (SET) or 30 (RST) ticks after the gate.
+ * Returns, per read tick, whether G fires, plus the register charge just
+ * before each read. Throws Ambiguous if a press hits a gate exactly as news
+ * arrives (a tie the model does not decide).
  */
-export function bitModel(presses: Press[], reads: number[]) {
+export function bitModel(presses: Press[], reads: number[], initial: 0 | 1 = 0) {
   const sorted = [...presses].sort((a, b) => a.t - b.t);
-  let bit = 0;
-  const open = { set: -Infinity, reset: Infinity }; // tick from which each gate is open
+  let bit = initial;
+  // tick from which each gate is open
+  const open = initial ? { set: Infinity, reset: -Infinity } : { set: -Infinity, reset: Infinity };
   const changes: Array<{ at: number; d: number; set: boolean }> = [];
   for (const p of sorted) {
     const a = p.t + 30;
@@ -50,7 +54,7 @@ export function bitModel(presses: Press[], reads: number[]) {
   // Sweep the (time-ordered) changes past the (ascending) reads.
   changes.sort((a, b) => a.at - b.at);
   let i = 0;
-  let value = 0;
+  let value: number = initial;
   return reads.map((T) => {
     while (i < changes.length && changes[i]!.at < T) value += changes[i++]!.d;
     let setNow = false;
@@ -67,39 +71,78 @@ export interface KeyPress {
   key: Direction;
 }
 
-/** Which bit inputs each key drives, and how many ticks later that input fires. */
-export type KeyWiring = Record<Direction, Array<{ bit: 'axis' | 'sign'; set: boolean; delay: number }>>;
+/** Which bit inputs each key drives (AXIS, then its own axis's bit), and how many ticks later that input fires. */
+export type KeyWiring = Record<Direction, Array<{ bit: BitName; set: boolean; delay: number }>>;
 
 /** The facts the press model needs about a built control unit. */
 export interface ControlFacts {
   F: number;
-  /** Ticks from a frame clock fire (tick 1 + kF) to the read of both registers. */
+  /** Ticks from a frame clock fire (tick 1 + kF) to the read of each register (H and V are read only on their axis). */
+  reads: Record<BitName, number>;
+  /** reads.axis: the frame's sample of the direction. */
   readOffset: number;
+  axisOne: 'vertical' | 'horizontal';
+  initial: Record<BitName, 0 | 1>;
   wiring: KeyWiring;
+  /**
+   * Ticks from a key press to the frame AXIS read from which each of its
+   * changes counts: AXIS, and its own axis's bit (never later than AXIS).
+   */
+  counts: Record<Direction, { axis: number; own: number }>;
+  /** Of two presses at least this many ticks apart, the later always wins (no reordering, no closed gate). */
+  gap: number;
 }
 
-/** Read a control unit's key wiring off a built network. */
+/** Read a control unit's key wiring off a built network: each wire's travel through its relays. */
 export function controlFacts(net: Network, ctl: ControlUnit): ControlFacts {
   const at = new Map(net.neurons.map((n) => [n.id, n]));
-  const d = (a: string, c: string) => travelTicks(at.get(a)!, at.get(c)!);
-  const { axis, sign } = ctl.bits;
-  const wiring: KeyWiring = {
-    up: [{ bit: 'axis', set: true, delay: d(ctl.keys.up, axis.setSource) }, { bit: 'sign', set: true, delay: d(ctl.keys.up, sign.setSource) }],
-    left: [{ bit: 'axis', set: false, delay: d(ctl.keys.left, axis.resetSource) }, { bit: 'sign', set: true, delay: d(ctl.keys.left, sign.setSource) }],
-    down: [{ bit: 'axis', set: true, delay: d(ctl.keys.down, axis.setSource) }, { bit: 'sign', set: false, delay: d(ctl.keys.down, sign.resetSource) }],
-    right: [{ bit: 'axis', set: false, delay: d(ctl.keys.right, axis.resetSource) }, { bit: 'sign', set: false, delay: d(ctl.keys.right, sign.resetSource) }],
-  };
-  return { F: ctl.F, readOffset: ctl.readOffset, wiring };
+  const tt = (a: string, c: string) => travelTicks(at.get(a)!, at.get(c)!);
+  const { keys } = keyTiming(tt, ctl);
+  const wiring = Object.fromEntries(DIRECTIONS.map((d) => [d, keys[d].map((w) => ({ bit: w.bit, set: w.set, delay: w.delay }))])) as KeyWiring;
+  const counts = Object.fromEntries(DIRECTIONS.map((d) => [d, { axis: keys[d][0]!.counts, own: keys[d][1]!.counts }])) as Record<Direction, { axis: number; own: number }>;
+  const all = DIRECTIONS.flatMap((d) => keys[d]);
+  const spread = (v: number[]) => Math.max(...v) - Math.min(...v);
+  // A gate opens 15 ticks after the other gate's news (per bit); and a later press's changes must count no
+  // earlier than any change of the press before it.
+  const gates = Math.max(...BITS.map((n) => spread(all.filter((w) => w.bit === n).map((w) => w.gate))));
+  const gap = Math.max(15 + gates, spread(all.map((w) => w.counts))) + 1;
+  return { F: ctl.F, reads: ctl.reads, readOffset: ctl.reads.axis, axisOne: ctl.axisOne, initial: ctl.initial, wiring, counts, gap };
+}
+
+const vertical = (d: Direction) => d === 'down' || d === 'up';
+
+/**
+ * The player's view of the control unit, independent of the bit model: for
+ * presses at least facts.gap ticks apart, each frame's strobe is the key of
+ * the latest press that counts by that frame's read (RIGHT before any). A
+ * press counts when its own axis's bit does if it turns along the axis the
+ * snake is on (◀ after ▶), else when AXIS does.
+ */
+export function intentModel(frames: number, presses: KeyPress[], facts: ControlFacts): Direction[] {
+  const sorted = [...presses].sort((a, b) => a.t - b.t);
+  const changes: Array<{ at: number; key: Direction }> = [];
+  let prev: Direction = 'right';
+  sorted.forEach((p, i) => {
+    if (i > 0 && p.t - sorted[i - 1]!.t < facts.gap) throw new Error(`intentModel: presses at ${sorted[i - 1]!.t} and ${p.t} are closer than ${facts.gap} ticks`);
+    if (p.key !== prev) changes.push({ at: p.t + (vertical(p.key) === vertical(prev) ? facts.counts[p.key].own : facts.counts[p.key].axis), key: p.key });
+    prev = p.key;
+  });
+  return Array.from({ length: frames }, (_, k) => {
+    const read = 1 + k * facts.F + facts.readOffset;
+    return changes.filter((c) => c.at <= read).at(-1)?.key ?? 'right';
+  });
 }
 
 /** Expected strobe direction per frame (throws Ambiguous on an undecided tie). */
 export function controlModel(frames: number, presses: KeyPress[], facts: ControlFacts): Direction[] {
-  const per = { axis: [] as Press[], sign: [] as Press[] };
-  for (const p of presses) for (const w of facts.wiring[p.key]) per[w.bit].push({ t: p.t + w.delay, set: w.set });
-  const reads = Array.from({ length: frames }, (_, k) => 1 + k * facts.F + facts.readOffset);
-  const a = bitModel(per.axis, reads);
-  const s = bitModel(per.sign, reads);
-  return reads.map((_, k) => (a[k]!.fires ? (s[k]!.fires ? 'up' : 'down') : s[k]!.fires ? 'left' : 'right'));
+  const per: Record<BitName, Press[]> = { axis: [], h: [], v: [] };
+  for (const p of presses) for (const w of facts.wiring[p.key]) per[w.bit].push({ t: p.t + w.delay, set: w.set, bit: w.bit });
+  const frame = Array.from({ length: frames }, (_, k) => 1 + k * facts.F);
+  const [a, h, v] = BITS.map((n) => bitModel(per[n], frame.map((c) => c + facts.reads[n]), facts.initial[n]));
+  return frame.map((_, k) => {
+    const isVertical = a![k]!.fires === (facts.axisOne === 'vertical');
+    return isVertical ? (v![k]!.fires ? 'up' : 'down') : h![k]!.fires ? 'left' : 'right';
+  });
 }
 
 /** Drop presses until the model is unambiguous. */
@@ -111,7 +154,7 @@ export function disambiguate(frames: number, presses: KeyPress[], facts: Control
     } catch (e) {
       if (!(e instanceof Ambiguous)) throw e;
       const bad = e.press;
-      const i = presses.findIndex((p) => facts.wiring[p.key].some((w) => p.t + w.delay === bad.t && w.set === bad.set));
+      const i = presses.findIndex((p) => facts.wiring[p.key].some((w) => w.bit === bad.bit && p.t + w.delay === bad.t && w.set === bad.set));
       presses = presses.filter((_, j) => j !== i);
     }
   }
